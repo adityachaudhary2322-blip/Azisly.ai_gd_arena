@@ -33,6 +33,8 @@ export interface StartSession {
   language: string;
   /** Optional background used to tailor panel questions. */
   profile?: CandidateProfile;
+  /** Length of the discussion (60-3600). When it runs out the moderator cuts in and sums up. */
+  duration_seconds?: number;
 }
 
 export interface CandidateProfile {

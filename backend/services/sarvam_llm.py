@@ -208,8 +208,6 @@ def _detect_mock_response(messages: List[Dict[str, str]]) -> str:
     if persona is None:
         return MOCK_DEFAULT_REPLY
 
-    if "summarize today" in user_text:
-        return MOCK_SUMMARY_HI if is_hindi else MOCK_SUMMARY_EN
     if "ask the candidate" in user_text:
         return (MOCK_INVITE_HI if is_hindi else MOCK_INVITE_EN)[persona]
     if "the candidate just spoke" in user_text:

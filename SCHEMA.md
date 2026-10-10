@@ -3,8 +3,8 @@
 ## Client -> Server Messages
 - Start Session:
   {"type": "start_session", "topic": "AI in Job Markets", "panel_size": 3, "language": "en-IN",
-   "profile": {"field": "Backend engineering", "interests": "Kafka, system design"}}
-  (language "hi-IN" = Hindi + English / Hinglish. profile is optional and tailors the panel's questions.)
+   "profile": {"field": "Backend engineering", "interests": "Kafka, system design"}, "duration_seconds": 420}
+  (language "hi-IN" = Hindi + English / Hinglish. profile is optional and tailors the panel's questions. duration_seconds (60-3600) sets the session length; when it runs out the moderator cuts in, summarizes, and final_report follows.)
 - Audio Stream Chunk:
   {"type": "audio_chunk", "data": "<base64_encoded_audio>"}
   (16-bit PCM, 16 kHz mono, 100 ms per chunk. Sent only while the candidate holds the floor and is speaking, gated by client-side VAD with ~300 ms pre-roll; the server treats every chunk as speech and ignores audio while the panel holds the floor.)

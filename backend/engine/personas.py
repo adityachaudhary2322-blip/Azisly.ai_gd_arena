@@ -67,6 +67,7 @@ class Persona:
         language: str = "en-IN",
         mode: str = "discuss",
         candidate_profile: str = "",
+        instruction: str = "",
     ) -> List[Dict[str, str]]:
         """Format the conversational message history for Sarvam Chat LLM with language constraints.
 
@@ -84,12 +85,8 @@ class Persona:
         lang_instruction = LANGUAGE_PROMPTS.get(language, LANGUAGE_PROMPTS["en-IN"])
         system_content = f"{self.system_prompt}\n\n{CONVERSATION_STYLE}\n\n{lang_instruction}"
 
-        if mode == "summary":
-            task = (
-                f"The candidate wants to stop for today. As {self.name}, summarize today's discussion "
-                "in 2 to 3 spoken sentences: the main viewpoints, what the candidate contributed, and "
-                "thank everyone, saying we can continue another day. Under 60 words."
-            )
+        if mode == "custom":
+            task = f"Respond as {self.name}. {instruction}"
         elif mode == "invite":
             task = (
                 f"Respond as {self.name}: make one short point, then turn to the candidate and ask the candidate "
@@ -104,8 +101,9 @@ class Persona:
             )
         else:
             task = (
-                f"Continue the discussion as {self.name}: react to the last speaker (you may name them), "
-                "add one fresh point, and do not repeat earlier points. 1 to 2 spoken sentences, under 30 words."
+                f"Continue the discussion as {self.name}: react to the last speaker (you may name them); "
+                "if the candidate spoke recently, engage with their actual point. Add one fresh point "
+                "and do not repeat earlier points. 1 to 2 spoken sentences, under 30 words."
             )
 
         profile_line = (

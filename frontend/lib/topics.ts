@@ -22,6 +22,10 @@ export const ABSTRACT_TOPICS = [
   "Ctrl + Z",
 ] as const;
 
+/** Discussion length choices, in minutes. */
+export const DURATIONS = [3, 5, 7, 10, 15, 20] as const;
+export const DEFAULT_DURATION = 7;
+
 export const LANGUAGES = [
   { value: "en-IN", label: "English" },
   { value: "hi-IN", label: "Hindi + English (Hinglish)" },

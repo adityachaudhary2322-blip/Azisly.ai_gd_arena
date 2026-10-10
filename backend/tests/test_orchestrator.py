@@ -324,3 +324,57 @@ def test_profile_reaches_the_question_prompt():
         candidate_profile="works in Cloud; knows about Kubernetes",
     )
     assert "works in Cloud; knows about Kubernetes" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_time_up_cuts_in_on_the_candidate_and_summarizes(fast_floor, monkeypatch):
+    """Time runs out mid-answer: mic closes, the moderator cuts in, summarizes, report follows."""
+    monkeypatch.setattr(settings, "CANDIDATE_RESPONSE_TIMEOUT", 30.0)
+    monkeypatch.setattr(settings, "USER_TURN_END_SILENCE", 30.0)  # candidate still talking
+
+    client = Client()
+    orchestrator = client.orchestrator
+    await orchestrator.start_session(topic="AI in Job Markets", panel_size=3, duration_seconds=600)
+    assert orchestrator.seconds_left == 600
+    await client.wait_for(lambda: orchestrator.floor == "user")
+
+    await orchestrator.handle_audio_chunk(_chunk())  # candidate is mid-answer
+    orchestrator.seconds_left = 1
+    await client.wait_for(lambda: client.of_type("final_report"), timeout=5.0)
+
+    floors = [m["floor"] for m in client.of_type("turn_update")]
+    assert floors[-1] == "panel"
+    arjun = client.texts("Arjun")
+    assert any("out of time" in t for t in arjun)
+    assert arjun[-1] != arjun[-2]  # time-up line, then the summary
+    assert len(client.texts("User")) == 1  # the interrupted answer is kept
+
+
+@pytest.mark.asyncio
+async def test_duration_is_clamped():
+    client = Client()
+    await client.orchestrator.start_session(topic="AI", panel_size=3, duration_seconds=5)
+    assert client.orchestrator.seconds_left == 60
+    await client.orchestrator.end_session()
+
+
+@pytest.mark.asyncio
+async def test_panel_lines_are_generated_for_the_topic_when_llm_available(monkeypatch):
+    """With a live LLM, the opening and check-in are written for the topic, not fixed phrases."""
+    prompts = []
+
+    async def fake_llm(messages, **_):
+        prompts.append(messages[-1]["content"])
+        return "Custom line about quantum startups?"
+
+    monkeypatch.setattr(gd_orchestrator, "get_sarvam_completion", fake_llm)
+    monkeypatch.setattr(GDOrchestrator, "_llm_enabled", staticmethod(lambda: True))
+
+    client = Client()
+    orchestrator = client.orchestrator
+    await orchestrator.start_session(topic="Quantum startups", panel_size=3)
+    await client.wait_for(lambda: client.texts("Arjun"))
+
+    assert client.texts("Arjun")[0] == "Custom line about quantum startups?"
+    assert any('GD Topic: "Quantum startups"' in p and "invite" in p for p in prompts)
+    await orchestrator.end_session()

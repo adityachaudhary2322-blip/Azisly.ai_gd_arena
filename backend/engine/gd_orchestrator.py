@@ -32,7 +32,12 @@ from typing import Any, Callable, Coroutine, Deque, Dict, List, Optional
 from backend.config import settings, SUPPORTED_LANGUAGES
 from backend.engine.evaluator import evaluate_session
 from backend.engine.personas import Persona, get_active_panel
-from backend.services.sarvam_llm import MOCK_DEFAULT_REPLY, get_sarvam_completion
+from backend.services.sarvam_llm import (
+    MOCK_DEFAULT_REPLY,
+    MOCK_SUMMARY_EN,
+    MOCK_SUMMARY_HI,
+    get_sarvam_completion,
+)
 from backend.services.sarvam_stt import transcribe_audio_bytes
 from backend.services.sarvam_tts import MOCK_AUDIO_PAYLOAD, synthesize_speech
 
@@ -82,7 +87,7 @@ PHRASES: Dict[str, Dict[str, Any]] = {
         "go_ahead": "Great, go ahead.",
         "not_caught": "Sorry, I didn't quite catch that. Could you say it again?",
         "move_on": "No worries, we'll come back to you. Let's keep going.",
-        "closing": "We're out of time. Thank you all, that was a lively discussion.",
+        "time_up": "Sorry to cut in, but we're out of time for today.",
         "fallback_question": "What do you think?",
         "acks": ["Mm, okay.", "Right.", "I see.", "Okay, interesting."],
     },
@@ -97,10 +102,40 @@ PHRASES: Dict[str, Dict[str, Any]] = {
         "go_ahead": "Accha, boliye.",
         "not_caught": "Maaf kijiye, theek se sunayi nahi diya. Kya aap dobara bolenge?",
         "move_on": "Koi baat nahi, hum aapke paas wapas aayenge. Chaliye aage badhte hain.",
-        "closing": "Hamara samay khatam ho gaya hai. Aap sabhi ka dhanyavaad.",
+        "time_up": "Maaf kijiye, beech mein tok raha hoon, aaj ka samay khatam ho gaya hai.",
         "fallback_question": "Aapka kya kehna hai?",
         "acks": ["Hmm, accha.", "Theek hai.", "Achha."],
     },
+}
+
+
+# Instructions for lines generated from the topic and conversation so far. The fixed
+# PHRASES above are only fallbacks (mock mode, or when the LLM call fails).
+INSTRUCTIONS = {
+    "opening": (
+        "Open this group discussion as the moderator: welcome everyone, frame the topic in one or two "
+        "sentences with an angle specific to it, then invite {name} by name to start. Under 50 words."
+    ),
+    "check_in": (
+        "You just asked the candidate a question and they have been silent for a moment. Briefly and "
+        "naturally ask whether they can hear you, and offer to repeat the question. One short sentence."
+    ),
+    "move_on": (
+        "The candidate has not responded. Briefly say you'll come back to them, then steer the discussion "
+        "to a fresh angle of the topic. Under 35 words."
+    ),
+    "rephrase": (
+        "The candidate asked you to repeat your question: '{question}'. Say 'Sure' and ask it again "
+        "in simpler words. Under 30 words, ending with a question mark."
+    ),
+    "time_up": (
+        "Politely cut in to say that today's time for this discussion is up. One short sentence; "
+        "do not summarize yet."
+    ),
+    "summary": (
+        "Summarize today's discussion in 2 to 3 spoken sentences: the main viewpoints raised, what the "
+        "candidate contributed (refer to their actual points), and thank everyone{tail}. Under 70 words."
+    ),
 }
 
 
@@ -148,6 +183,8 @@ class GDOrchestrator:
         self.language: str = "en-IN"
         self.panel: List[Persona] = []
         self.candidate_profile: str = ""
+        self.session_seconds: int = DEFAULT_SESSION_SECONDS
+        self.time_up_task: Optional[asyncio.Task] = None
         self.start_time: float = 0.0
         self.seconds_left: int = DEFAULT_SESSION_SECONDS
         self.is_active: bool = False
@@ -200,6 +237,7 @@ class GDOrchestrator:
                 panel_size=int(message.get("panel_size", 3)),
                 language=message.get("language", "en-IN"),
                 profile=message.get("profile"),
+                duration_seconds=message.get("duration_seconds"),
             )
         elif msg_type == "audio_chunk":
             await self.handle_audio_chunk(message.get("data", ""))
@@ -222,6 +260,7 @@ class GDOrchestrator:
         panel_size: int = 3,
         language: str = "en-IN",
         profile: Optional[Dict[str, Any]] = None,
+        duration_seconds: Optional[int] = None,
     ) -> None:
         """Initialize session and activate the first N panel personas with target language."""
         self.topic = topic
@@ -237,7 +276,11 @@ class GDOrchestrator:
 
         self.panel = get_active_panel(self.panel_size)
         self.start_time = time.time()
-        self.seconds_left = DEFAULT_SESSION_SECONDS
+        try:
+            self.session_seconds = max(60, min(3600, int(duration_seconds)))
+        except (TypeError, ValueError):
+            self.session_seconds = DEFAULT_SESSION_SECONDS
+        self.seconds_left = self.session_seconds
         self.is_active = True
         self.transcript.clear()
         self.interruptions_handled = 0
@@ -265,8 +308,16 @@ class GDOrchestrator:
 
         moderator = self.panel[0]
         first_speaker = self._select_next_speaker(exclude=moderator.name)
-        opening_text = self._phrases["opening"].format(topic=self.topic, name=first_speaker.name)
-        opening = asyncio.create_task(self._make_clip(moderator, opening_text))
+        opening = asyncio.create_task(self._custom_clip(
+            moderator,
+            INSTRUCTIONS["opening"].format(name=first_speaker.name),
+            self._phrases["opening"].format(topic=self.topic, name=first_speaker.name),
+        ))
+        # Ready in advance so the moderator can cut in the instant time runs out.
+        self._cancel_task(self.time_up_task)
+        self.time_up_task = asyncio.create_task(
+            self._custom_clip(moderator, INSTRUCTIONS["time_up"], self._phrases["time_up"])
+        )
 
         self.is_ai_speaking = True
         self.active_turn_task = asyncio.create_task(
@@ -284,6 +335,7 @@ class GDOrchestrator:
         self._cancel_task(self.pause_timer_task)
         self._cancel_task(self.user_turn_task)
         self._cancel_task(self.active_turn_task)
+        self._cancel_task(self.time_up_task)
         self._cancel_handoff_prefetch()
 
         # Keep whatever the candidate said right before ending.
@@ -298,20 +350,82 @@ class GDOrchestrator:
         logger.info("Session ended. Dispatched final_report matching SCHEMA.md.")
 
     async def _close_discussion(self) -> None:
-        """Time is up: the moderator wraps up, then the report is sent."""
+        """Time is up: the moderator cuts in (even mid-answer), summarizes, then the report is sent."""
         self._cancel_task(self.pause_timer_task)
         self._cancel_task(self.user_turn_task)
         self._cancel_task(self.active_turn_task)
         self._cancel_handoff_prefetch()
+        self.handoff = None
+
         if self.floor == "user":
-            await self._set_floor("panel")
+            await self._set_floor("panel")  # closes the candidate's mic
+        elif self.outstanding:
+            # A panelist is mid-line: stop them so the moderator can cut in now.
+            await self._send({"type": "agent_interrupted", "speaker": self.current_speaker})
+            self.outstanding.clear()
+        self.is_ai_speaking = True
+
         try:
-            closing = await self._make_clip(self.panel[0], self._phrases["closing"])
-            await self._dispatch(closing)
+            time_up = await self.time_up_task if self.time_up_task else None
+        except Exception:
+            time_up = None
+        try:
+            if time_up is None:
+                time_up = await self._make_clip(self.panel[0], self._phrases["time_up"])
+            await self._dispatch(time_up)
+            # Whatever the candidate was saying belongs in the summary and the report.
+            await self._transcribe_and_record_buffer()
+            await self._dispatch(await self._summary_clip(stopping_early=False))
             await self._wait_for_outstanding(0)
+        except asyncio.CancelledError:
+            return
         except Exception as exc:
             logger.warning("Closing remarks failed: %s", exc)
         await self.end_session()
+
+    async def _summary_clip(self, stopping_early: bool) -> Clip:
+        tail = ", saying you'll continue another day" if stopping_early else ""
+        fallback = MOCK_SUMMARY_HI if self.language == "hi-IN" else MOCK_SUMMARY_EN
+        return await self._custom_clip(
+            self.panel[0],
+            INSTRUCTIONS["summary"].format(tail=tail),
+            fallback,
+            history=24,
+            max_tokens=200,
+        )
+
+    @staticmethod
+    def _llm_enabled() -> bool:
+        return not settings.MOCK_VOICE and bool(settings.SARVAM_API_KEY.strip())
+
+    async def _custom_clip(
+        self,
+        persona: Persona,
+        instruction: str,
+        fallback: str,
+        yields_floor: bool = False,
+        history: int = 10,
+        max_tokens: int = 110,
+    ) -> Clip:
+        """A line written for this topic and conversation, falling back to a fixed phrase."""
+        text = fallback
+        if self._llm_enabled():
+            messages = persona.format_chat_messages(
+                topic=self.topic,
+                recent_transcripts=self.transcript[-history:],
+                language=self.language,
+                mode="custom",
+                candidate_profile=self.candidate_profile,
+                instruction=instruction,
+            )
+            try:
+                raw = await get_sarvam_completion(messages=messages, temperature=0.7, max_tokens=max_tokens)
+                text = self._clean_line(raw, persona) or fallback
+            except Exception as exc:
+                logger.warning("Custom line failed for %s: %s", persona.name, exc)
+        if yields_floor and "?" not in text:
+            text = f"{text} {self._phrases['fallback_question']}"
+        return await self._make_clip(persona, text, yields_floor=yields_floor)
 
     # -----------------------------------------------------------------------
     # Panel speaking loop
@@ -486,9 +600,9 @@ class GDOrchestrator:
             asker=asker,
             question=question,
             # Prefetched so the check-in and acknowledgement play with no delay.
-            check_in=asyncio.create_task(
-                self._make_clip(asker, self._phrases["check_in"], yields_floor=True)
-            ),
+            check_in=asyncio.create_task(self._custom_clip(
+                asker, INSTRUCTIONS["check_in"], self._phrases["check_in"], yields_floor=True
+            )),
             ack=asyncio.create_task(
                 self._make_clip(asker, random.choice(self._phrases["acks"]), record=False)
             ),
@@ -543,7 +657,9 @@ class GDOrchestrator:
         self._reset_handoff_cadence()
         move_on = None
         if handoff:
-            move_on = asyncio.create_task(self._make_clip(self.panel[0], self._phrases["move_on"]))
+            move_on = asyncio.create_task(self._custom_clip(
+                self.panel[0], INSTRUCTIONS["move_on"], self._phrases["move_on"]
+            ))
         self.active_turn_task = asyncio.create_task(self._panel_loop(lead=move_on))
 
     async def _speak_then_yield(self, clips: List["asyncio.Future[Clip] | Clip"]) -> None:
@@ -632,9 +748,19 @@ class GDOrchestrator:
         if handoff and REPEAT_REQUEST.search(text) and len(words) <= 12:
             self._record_user(text)
             await self._send_user_transcript(text)
-            intro = asyncio.ensure_future(self._make_clip(handoff.asker, self._phrases["repeat_intro"]))
-            again = dataclasses.replace(handoff.question)
-            self.active_turn_task = asyncio.create_task(self._speak_then_yield([intro, again]))
+            if self._llm_enabled():
+                # Ask it again in simpler words rather than replaying it verbatim.
+                rephrased = asyncio.ensure_future(self._custom_clip(
+                    handoff.asker,
+                    INSTRUCTIONS["rephrase"].format(question=handoff.question.text),
+                    handoff.question.text,
+                    yields_floor=True,
+                ))
+                self.active_turn_task = asyncio.create_task(self._speak_then_yield([rephrased]))
+            else:
+                intro = asyncio.ensure_future(self._make_clip(handoff.asker, self._phrases["repeat_intro"]))
+                again = dataclasses.replace(handoff.question)
+                self.active_turn_task = asyncio.create_task(self._speak_then_yield([intro, again]))
             return
 
         if handoff and handoff.checked_in and HEARING_CONFIRMATION.search(text) and len(words) <= 6:
@@ -660,18 +786,9 @@ class GDOrchestrator:
 
     async def _wrap_up(self) -> None:
         """Candidate asked to stop for today: the moderator summarizes, then the report is sent."""
-        moderator = self.panel[0]
         self.is_ai_speaking = True
-        messages = moderator.format_chat_messages(
-            topic=self.topic,
-            recent_transcripts=self.transcript[-14:],
-            language=self.language,
-            mode="summary",
-        )
         try:
-            raw = await get_sarvam_completion(messages=messages, temperature=0.4, max_tokens=180)
-            summary = self._clean_line(raw, moderator) or self._phrases["closing"]
-            await self._dispatch(await self._make_clip(moderator, summary))
+            await self._dispatch(await self._summary_clip(stopping_early=True))
             await self._wait_for_outstanding(0)
         except asyncio.CancelledError:
             return

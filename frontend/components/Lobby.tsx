@@ -7,7 +7,14 @@ import { useId, useState } from "react";
 import { useGDSession } from "@/components/GDSessionProvider";
 import { SeatAvatar } from "@/components/SeatAvatar";
 import { MAX_PANEL, MIN_PANEL, panelForSize, USER_SEAT } from "@/lib/personas";
-import { ABSTRACT_TOPICS, LANGUAGES, PLACEMENT_TOPICS, type TopicCategory } from "@/lib/topics";
+import {
+  ABSTRACT_TOPICS,
+  DEFAULT_DURATION,
+  DURATIONS,
+  LANGUAGES,
+  PLACEMENT_TOPICS,
+  type TopicCategory,
+} from "@/lib/topics";
 
 const CATEGORIES = [
   { id: "placement", label: "Placement classics", icon: Briefcase },
@@ -27,6 +34,7 @@ export function Lobby() {
   const [custom, setCustom] = useState("");
   const [panelSize, setPanelSize] = useState(3);
   const [language, setLanguage] = useState<string>(LANGUAGES[0].value);
+  const [minutes, setMinutes] = useState<number>(DEFAULT_DURATION);
   const [field, setField] = useState("");
   const [interests, setInterests] = useState("");
 
@@ -48,7 +56,13 @@ export function Lobby() {
       field.trim() || interests.trim()
         ? { field: field.trim(), interests: interests.trim() }
         : undefined;
-    void startSession({ topic, panel_size: panelSize, language, profile });
+    void startSession({
+      topic,
+      panel_size: panelSize,
+      language,
+      profile,
+      duration_seconds: minutes * 60,
+    });
     router.push("/arena");
   }
 
@@ -197,6 +211,27 @@ export function Lobby() {
                 </li>
               ))}
             </ul>
+
+            <div className="space-y-2">
+              <label htmlFor={`${ids}-time`} className="block text-sm font-medium text-muted">
+                Discussion length
+              </label>
+              <select
+                id={`${ids}-time`}
+                value={minutes}
+                onChange={(e) => setMinutes(Number(e.target.value))}
+                className="w-full rounded-lg border border-border-strong bg-background px-3 py-2.5 text-foreground"
+              >
+                {DURATIONS.map((m) => (
+                  <option key={m} value={m}>
+                    {m} minutes
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-subtle">
+                When time is up the moderator cuts in and sums up the discussion.
+              </p>
+            </div>
 
             <div className="space-y-2">
               <label htmlFor={`${ids}-lang`} className="block text-sm font-medium text-muted">
