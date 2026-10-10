@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+/*
+ * GD Arena theme (Tailwind v4 CSS-first config — there is no tailwind.config.ts).
+ * Always-dark, high-contrast palette: slate/zinc surfaces, emerald (user/success)
+ * and indigo (AI panel/brand) highlights. Foreground/background pairs below all
+ * meet WCAG AA (most exceed AAA) against the surfaces they sit on.
+ */
+@theme {
+  /* Surfaces */
+  --color-background: #09090b; /* zinc-950 */
+  --color-surface: #18181b; /* zinc-900 */
+  --color-surface-raised: #1e293b; /* slate-800 */
+  --color-border: #334155; /* slate-700 */
+  --color-border-strong: #475569; /* slate-600 */
+
+  /* Text */
+  --color-foreground: #f8fafc; /* slate-50  — 19.6:1 on background */
+  --color-muted: #cbd5e1; /* slate-300 — 13.4:1 on background */
+  --color-subtle: #94a3b8; /* slate-400 — 7.6:1 on background */
+
+  /* Highlights */
+  --color-primary: #818cf8; /* indigo-400 — AI panel / brand */
+  --color-primary-strong: #6366f1; /* indigo-500 */
+  --color-primary-foreground: #09090b;
+  --color-accent: #34d399; /* emerald-400 — candidate / live / success */
+  --color-accent-strong: #10b981; /* emerald-500 */
+  --color-accent-foreground: #022c22;
+  --color-danger: #f87171; /* red-400 */
+  --color-warning: #fbbf24; /* amber-400 */
+
+  --color-ring: #a5b4fc; /* indigo-300, visible focus ring */
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+}
+
+/* Visible, consistent keyboard focus everywhere. */
+:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--color-primary-strong);
+  color: var(--color-foreground);
+}
+
+/*
+ * Persona avatar ring. `--seat` is the persona colour; `--level` (0–1) is set
+ * per animation frame from live audio while the seat is the active speaker.
+ */
+.seat-ring {
+  --level: 0;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--seat) 45%, var(--color-border));
+  transition:
+    box-shadow 90ms linear,
+    transform 90ms linear;
+}
+
+.seat-ring[data-active] {
+  box-shadow:
+    0 0 0 calc(3px + var(--level) * 5px) var(--seat),
+    0 0 calc(14px + var(--level) * 42px) calc(2px + var(--level) * 14px)
+      color-mix(in oklab, var(--seat) 60%, transparent);
+  transform: scale(calc(1.04 + var(--level) * 0.1));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
