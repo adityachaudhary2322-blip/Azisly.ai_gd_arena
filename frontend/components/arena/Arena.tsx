@@ -182,7 +182,7 @@ export function Arena() {
                       <p className={`text-sm font-semibold ${active ? "text-foreground" : "text-muted"}`}>
                         {name ?? seat.label}
                       </p>
-                      {name && <p className="text-xs text-subtle">{seat.label}</p>}
+                      {name && <p className="text-xs text-subtle">{seat.label} · AI</p>}
                       {active && <span className="sr-only">(speaking)</span>}
                     </div>
                   </li>
