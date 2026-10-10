@@ -4,13 +4,15 @@ services:
     env: python
     region: singapore
     plan: free
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    # Run from the repo root: the backend imports itself as the `backend`
+    # package (`from backend.config import ...`), so it cannot start from
+    # inside backend/.
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: 3.11.9
       - key: SARVAM_API_KEY
         sync: false
       - key: MOCK_VOICE
