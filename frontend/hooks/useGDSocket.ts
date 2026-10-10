@@ -42,9 +42,9 @@ export const DEFAULT_GD_WS_URL =
  * Wire format for outgoing `audio_chunk.data`: base64 of raw PCM,
  * signed 16-bit little-endian, mono, 16 kHz, 100 ms per chunk.
  *
- * Chunks are sent only while the VAD hears the candidate speaking: the
- * backend treats every chunk as speech (interrupts the AI, resets its
- * end-of-turn pause timer), so streaming silence would stall the discussion.
+ * Chunks are sent only while the candidate holds the floor (a panelist asked
+ * them a question) and the VAD hears them speaking. The backend treats every
+ * chunk as speech, so streaming silence or speaker echo would derail turns.
  */
 const TARGET_SAMPLE_RATE = 16_000;
 const CHUNK_MS = 100;
@@ -59,6 +59,13 @@ const VAD_ECHO_GUARD = 1.6; // extra headroom while AI audio plays (speaker blee
 const VAD_ONSET_FRAMES = 3; // ~60 ms of speech before we call it speech
 const VAD_HANGOVER_FRAMES = 25; // ~500 ms of silence before we call it silence
 
+/** Pause between different panelists, like people taking turns (randomised in range). */
+const SPEAKER_GAP_MS: [number, number] = [250, 450];
+/** Clips quieter than this peak are placeholders (mock mode) and get spoken by the browser. */
+const SILENT_PEAK = 0.002;
+/** Release a held transcript line even if its audio never starts. */
+const TRANSCRIPT_HOLD_MAX_MS = 15_000;
+
 /** How long to wait for `final_report` after `end_session` before closing. */
 const REPORT_TIMEOUT_MS = 30_000;
 
@@ -72,6 +79,9 @@ export type ConnectionStatus =
   | "connected"
   | "disconnected"
   | "error";
+
+/** Who may speak: the AI panel, or the candidate (after being asked). */
+export type Floor = "panel" | "user";
 
 export type StartSessionOptions = Omit<StartSession, "type">;
 
@@ -93,6 +103,10 @@ export interface UseGDSocketResult {
   timeLeft: number | null;
   reportData: FinalReport | null;
   error: string | null;
+  /** Who holds the floor; the mic only streams while it is "user". */
+  floor: Floor | null;
+  /** Panelist whose question the candidate is answering. */
+  floorAsker: AgentName | null;
   /** Speaker name -> `avatar_id`, learned from `agent_speaking` events. */
   speakerAvatars: Record<string, string>;
   /** Cheap to call every animation frame; reads live analyser values. */
@@ -195,23 +209,53 @@ function isServerMessage(value: unknown): value is ServerMessage {
   );
 }
 
+function isSilent(buffer: AudioBuffer): boolean {
+  const data = buffer.getChannelData(0);
+  const step = Math.max(1, Math.floor(data.length / 4000));
+  for (let i = 0; i < data.length; i += step) {
+    if (Math.abs(data[i]) > SILENT_PEAK) return false;
+  }
+  return true;
+}
+
+function hashString(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+/** A stable browser voice per panelist, preferring the session language. */
+function pickVoice(voices: SpeechSynthesisVoice[], lang: string, speaker: string) {
+  const norm = (l: string) => l.replace("_", "-").toLowerCase();
+  let pool = voices.filter((v) => norm(v.lang) === norm(lang));
+  if (pool.length === 0) pool = voices.filter((v) => norm(v.lang).startsWith(lang.split("-")[0]));
+  return pool.length ? pool[hashString(speaker) % pool.length] : null;
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 // ---------------------------------------------------------------------------
-// Audio engine: mic capture + VAD + gapless playback queue.
+// Audio engine: mic capture + VAD + sequential playback queue.
 // Plain class so it lives outside React's render cycle.
 // ---------------------------------------------------------------------------
 
-interface AudioEngineCallbacks {
-  onChunk: (base64Pcm: string) => void;
-  /** Speech onset detected. `agentAudioActive` = AI audio was playing or queued. */
-  onSpeechStart: (agentAudioActive: boolean) => void;
-  onSpeechEnd: () => void;
-  onAgentAudioStart: (speaker: AgentName) => void;
-  onAgentAudioIdle: () => void;
+interface QueuedClip {
+  speaker: AgentName;
+  turnId: number | null;
+  text: string;
+  yieldsFloor: boolean;
+  decoded: Promise<AudioBuffer | null>;
 }
 
-interface ScheduledClip {
-  source: AudioBufferSourceNode;
-  startTimer: ReturnType<typeof setTimeout>;
+interface AudioEngineCallbacks {
+  onChunk: (base64Pcm: string) => void;
+  onSpeechStart: () => void;
+  onSpeechEnd: () => void;
+  onClipStart: (clip: QueuedClip) => void;
+  onClipEnd: (clip: QueuedClip) => void;
+  onPlaybackIdle: () => void;
 }
 
 class GDAudioEngine {
@@ -226,23 +270,28 @@ class GDAudioEngine {
   private micLevel = 0;
 
   // Playback queue
-  private scheduled: ScheduledClip[] = [];
-  private playheadEnd = 0;
-  private decodeChain: Promise<void> = Promise.resolve();
-  private pendingDecodes = 0;
+  private queue: QueuedClip[] = [];
+  private pumping = false;
   private generation = 0;
+  private stopCurrent: (() => void) | null = null;
+  private playingBuffer = false;
+  private speakingWithBrowser = false;
+  private lastSpeaker: string | null = null;
+  private lastEndedAt = 0;
 
   // VAD
   private noiseFloor = 0.01;
   private speaking = false;
-  private preRoll: string[] = [];
   private aboveCount = 0;
   private belowCount = 0;
+  private preRoll: string[] = [];
+  /** Outgoing audio gate: open only while the candidate holds the floor. */
+  private micOpen = false;
 
-  /** Gate for outgoing audio; enabled once the server session is live. */
-  streaming = false;
-
-  constructor(private readonly cb: AudioEngineCallbacks) {}
+  constructor(
+    private readonly cb: AudioEngineCallbacks,
+    private readonly language: string,
+  ) {}
 
   /** Must be called from a user gesture so the AudioContext may start. */
   async start(): Promise<void> {
@@ -295,85 +344,164 @@ class GDAudioEngine {
 
     this.playbackGain = ctx.createGain();
     this.playbackGain.connect(this.analyser);
+
+    // Browsers load speech voices lazily; ask early so the first fallback line has one.
+    window.speechSynthesis?.getVoices();
+  }
+
+  setMicOpen(open: boolean): void {
+    this.micOpen = open;
+    if (!open) this.preRoll = [];
   }
 
   /** Levels normalised to 0–1 for visualisation (speech RMS rarely exceeds ~0.3). */
   getLevels(): AudioLevels {
     let agent = 0;
-    if (this.analyser && this.analyserData && this.scheduled.length > 0) {
+    if (this.playingBuffer && this.analyser && this.analyserData) {
       this.analyser.getFloatTimeDomainData(this.analyserData);
       let sq = 0;
       for (const v of this.analyserData) sq += v * v;
-      agent = Math.sqrt(sq / this.analyserData.length);
+      agent = Math.min(1, Math.sqrt(sq / this.analyserData.length) * 4);
+    } else if (this.speakingWithBrowser) {
+      // Browser speech can't be measured; approximate a speaking rhythm.
+      const t = performance.now() / 1000;
+      agent = 0.35 + 0.25 * Math.abs(Math.sin(t * 7)) * Math.abs(Math.sin(t * 2.3));
     }
-    const norm = (rms: number) => Math.min(1, rms * 4);
-    return { user: this.stream ? norm(this.micLevel) : 0, agent: norm(agent) };
+    return { user: this.stream ? Math.min(1, this.micLevel * 4) : 0, agent };
   }
 
   get agentAudioActive(): boolean {
-    return this.scheduled.length > 0 || this.pendingDecodes > 0;
+    return this.pumping || this.queue.length > 0;
   }
 
-  /** Queue base64 WAV/MP3 to play strictly after everything already queued. */
-  enqueue(audioBase64: string, speaker: AgentName): void {
+  /** Queue a clip; clips play one after another, never overlapping. */
+  enqueue(
+    audioBase64: string,
+    speaker: AgentName,
+    turnId: number | null,
+    text: string,
+    yieldsFloor: boolean,
+  ): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    const gen = this.generation;
-    this.pendingDecodes++;
+    // Decoding starts now so it overlaps whatever is playing.
+    const decoded = ctx.decodeAudioData(base64ToArrayBuffer(audioBase64)).catch((err) => {
+      console.warn("[useGDSocket] failed to decode agent audio", err);
+      return null;
+    });
+    this.queue.push({ speaker, turnId, text, yieldsFloor, decoded });
+    if (!this.pumping) void this.pump();
+  }
 
-    // Decode in arrival order so clips can never be reordered.
-    this.decodeChain = this.decodeChain.then(async () => {
-      try {
+  private async pump(): Promise<void> {
+    this.pumping = true;
+    const gen = this.generation;
+    try {
+      while (this.queue.length > 0 && gen === this.generation) {
+        const clip = this.queue.shift()!;
+        const buffer = await clip.decoded;
         if (gen !== this.generation) return;
-        const buffer = await ctx.decodeAudioData(base64ToArrayBuffer(audioBase64));
-        if (gen !== this.generation) return;
-        this.schedule(buffer, speaker);
-      } catch (err) {
-        console.warn("[useGDSocket] failed to decode agent audio", err);
-      } finally {
-        if (gen === this.generation) {
-          this.pendingDecodes--;
-          if (!this.agentAudioActive) this.cb.onAgentAudioIdle();
+
+        if (this.lastSpeaker && this.lastSpeaker !== clip.speaker) {
+          const [lo, hi] = SPEAKER_GAP_MS;
+          const wait = lo + Math.random() * (hi - lo) - (performance.now() - this.lastEndedAt);
+          if (wait > 0) await sleep(wait);
+          if (gen !== this.generation) return;
         }
+
+        this.cb.onClipStart(clip);
+        if (buffer && !isSilent(buffer)) await this.playBuffer(buffer);
+        else await this.speakWithBrowser(clip);
+        if (gen !== this.generation) return;
+
+        this.lastSpeaker = clip.speaker;
+        this.lastEndedAt = performance.now();
+        this.cb.onClipEnd(clip);
       }
+    } finally {
+      if (gen === this.generation) {
+        this.pumping = false;
+        this.cb.onPlaybackIdle();
+      }
+    }
+  }
+
+  private playBuffer(buffer: AudioBuffer): Promise<void> {
+    const ctx = this.ctx;
+    const out = this.playbackGain;
+    if (!ctx || !out) return Promise.resolve();
+    return new Promise((resolve) => {
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(out);
+      const done = () => {
+        source.onended = null;
+        source.disconnect();
+        this.playingBuffer = false;
+        this.stopCurrent = null;
+        resolve();
+      };
+      source.onended = done;
+      this.stopCurrent = () => {
+        try {
+          source.stop();
+        } catch {
+          // already stopped
+        }
+        done();
+      };
+      this.playingBuffer = true;
+      source.start();
     });
   }
 
-  private schedule(buffer: AudioBuffer, speaker: AgentName): void {
-    const ctx = this.ctx;
-    const out = this.playbackGain;
-    if (!ctx || !out) return;
+  /** Fallback for silent placeholder audio (mock mode) or undecodable clips. */
+  private speakWithBrowser(clip: QueuedClip): Promise<void> {
+    const text = clip.text.trim();
+    const estimateMs = Math.max(1200, text.split(/\s+/).length * 450);
+    const synth = typeof window !== "undefined" ? window.speechSynthesis : undefined;
 
-    // Start exactly where the previous clip ends: no overlap, no gap.
-    const startAt = Math.max(ctx.currentTime, this.playheadEnd);
-    this.playheadEnd = startAt + buffer.duration;
+    return new Promise((resolve) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const finish = () => {
+        clearTimeout(timer);
+        this.speakingWithBrowser = false;
+        this.stopCurrent = null;
+        resolve();
+      };
+      this.stopCurrent = () => {
+        synth?.cancel();
+        finish();
+      };
 
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(out);
-    source.start(startAt);
+      if (!synth || !text) {
+        timer = setTimeout(finish, text ? estimateMs : 300);
+        return;
+      }
+      // Some browsers never fire `end`; never let one clip stall the queue.
+      timer = setTimeout(finish, estimateMs * 2 + 3000);
 
-    const clip: ScheduledClip = {
-      source,
-      startTimer: setTimeout(
-        () => this.cb.onAgentAudioStart(speaker),
-        Math.max(0, (startAt - ctx.currentTime) * 1000),
-      ),
-    };
-    this.scheduled.push(clip);
-
-    source.onended = () => {
-      this.scheduled = this.scheduled.filter((c) => c !== clip);
-      source.disconnect();
-      if (!this.agentAudioActive) this.cb.onAgentAudioIdle();
-    };
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = this.language;
+      const voice = pickVoice(synth.getVoices(), this.language, clip.speaker);
+      if (voice) utterance.voice = voice;
+      utterance.pitch = 0.85 + (hashString(clip.speaker) % 5) * 0.08;
+      utterance.rate = 1.05;
+      utterance.onend = finish;
+      utterance.onerror = finish;
+      this.speakingWithBrowser = true;
+      synth.speak(utterance);
+    });
   }
 
-  /** Hard-stop all AI audio immediately and drop anything queued or decoding. */
+  /** Hard-stop all AI audio immediately and drop anything queued. */
   stopPlayback(): void {
     this.generation++;
-    this.pendingDecodes = 0;
-    this.playheadEnd = 0;
+    this.queue = [];
+    this.pumping = false;
+    this.lastSpeaker = null;
+    this.stopCurrent?.();
+    window.speechSynthesis?.cancel();
 
     const ctx = this.ctx;
     if (ctx && this.playbackGain && this.analyser) {
@@ -383,35 +511,23 @@ class GDAudioEngine {
       this.playbackGain = ctx.createGain();
       this.playbackGain.connect(this.analyser);
     }
-
-    for (const clip of this.scheduled) {
-      clearTimeout(clip.startTimer);
-      clip.source.onended = null;
-      try {
-        clip.source.stop();
-      } catch {
-        // already stopped
-      }
-      clip.source.disconnect();
-    }
-    this.scheduled = [];
-    this.cb.onAgentAudioIdle();
+    this.cb.onPlaybackIdle();
   }
 
   private onWorkletMessage(
     data: { type: "pcm"; buffer: ArrayBuffer } | { type: "level"; rms: number },
   ): void {
-    if (data.type === "pcm") {
-      if (!this.streaming) return;
-      const chunk = bytesToBase64(new Uint8Array(data.buffer));
-      if (this.speaking) {
-        this.cb.onChunk(chunk);
-      } else {
-        this.preRoll.push(chunk);
-        if (this.preRoll.length > PRE_ROLL_CHUNKS) this.preRoll.shift();
-      }
-    } else {
+    if (data.type === "level") {
       this.runVad(data.rms);
+      return;
+    }
+    if (!this.micOpen) return;
+    const chunk = bytesToBase64(new Uint8Array(data.buffer));
+    if (this.speaking) {
+      this.cb.onChunk(chunk);
+    } else {
+      this.preRoll.push(chunk);
+      if (this.preRoll.length > PRE_ROLL_CHUNKS) this.preRoll.shift();
     }
   }
 
@@ -425,9 +541,9 @@ class GDAudioEngine {
       this.belowCount = 0;
       if (!this.speaking && ++this.aboveCount >= VAD_ONSET_FRAMES) {
         this.speaking = true;
-        // Interrupt first, then the buffered lead-in audio.
-        this.cb.onSpeechStart(agentActive);
-        if (this.streaming) for (const chunk of this.preRoll) this.cb.onChunk(chunk);
+        this.cb.onSpeechStart();
+        // Send the buffered lead-in so the first syllable reaches the server.
+        if (this.micOpen) for (const chunk of this.preRoll) this.cb.onChunk(chunk);
         this.preRoll = [];
       }
       return;
@@ -447,7 +563,7 @@ class GDAudioEngine {
 
   /** Stop the microphone but keep the context alive (e.g. awaiting report). */
   stopCapture(): void {
-    this.streaming = false;
+    this.micOpen = false;
     this.preRoll = [];
     if (this.worklet) {
       this.worklet.port.onmessage = null;
@@ -488,17 +604,53 @@ export function useGDSocket({
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [reportData, setReportData] = useState<FinalReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [floor, setFloor] = useState<Floor | null>(null);
+  const [floorAsker, setFloorAsker] = useState<AgentName | null>(null);
   const [speakerAvatars, setSpeakerAvatars] = useState<Record<string, string>>({});
 
   const wsRef = useRef<WebSocket | null>(null);
   const engineRef = useRef<GDAudioEngine | null>(null);
   const reportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const floorRef = useRef<Floor | null>(null);
+  /** Panelist lines wait here until their audio starts, so text and voice stay in sync. */
+  const heldLinesRef = useRef(
+    new Map<number, { entry: TranscriptUpdate; timer: ReturnType<typeof setTimeout> }>(),
+  );
+  const startedTurnsRef = useRef(new Set<number>());
   /** Bumped on every start/teardown so stale async work can bail out. */
   const sessionRef = useRef(0);
 
   const send = useCallback((msg: ClientMessage) => {
     const ws = wsRef.current;
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  }, []);
+
+  const appendLine = useCallback((entry: TranscriptUpdate) => {
+    setTranscriptList((list) => [...list, entry]);
+  }, []);
+
+  const releaseLine = useCallback(
+    (turnId: number) => {
+      const held = heldLinesRef.current.get(turnId);
+      if (!held) return;
+      clearTimeout(held.timer);
+      heldLinesRef.current.delete(turnId);
+      appendLine(held.entry);
+    },
+    [appendLine],
+  );
+
+  const releaseAllLines = useCallback(() => {
+    const ids = [...heldLinesRef.current.keys()].sort((a, b) => a - b);
+    ids.forEach(releaseLine);
+  }, [releaseLine]);
+
+  const applyFloor = useCallback((next: Floor | null, asker: AgentName | null = null) => {
+    floorRef.current = next;
+    setFloor(next);
+    setFloorAsker(next === "user" ? asker : null);
+    engineRef.current?.setMicOpen(next === "user");
+    if (next !== "user") setActiveSpeaker((s) => (s === "User" ? null : s));
   }, []);
 
   const teardown = useCallback(() => {
@@ -517,6 +669,10 @@ export function useGDSocket({
     }
     engineRef.current?.dispose();
     engineRef.current = null;
+    for (const { timer } of heldLinesRef.current.values()) clearTimeout(timer);
+    heldLinesRef.current.clear();
+    startedTurnsRef.current.clear();
+    floorRef.current = null;
   }, []);
 
   useEffect(() => teardown, [teardown]);
@@ -532,23 +688,38 @@ export function useGDSocket({
       setTimeLeft(null);
       setActiveSpeaker(null);
       setSpeakerAvatars({});
+      setFloor(null);
+      setFloorAsker(null);
       setConnectionStatus("connecting");
 
-      const engine = new GDAudioEngine({
-        onChunk: (data) => send({ type: "audio_chunk", data }),
-        onSpeechStart: (agentAudioActive) => {
-          if (agentAudioActive) {
-            // Barge-in: kill AI audio locally first, then tell the server.
-            engine.stopPlayback();
-            send({ type: "user_interrupted" });
-          }
-          setActiveSpeaker("User");
+      const engine = new GDAudioEngine(
+        {
+          onChunk: (data) => send({ type: "audio_chunk", data }),
+          onSpeechStart: () => {
+            if (floorRef.current === "user") setActiveSpeaker("User");
+          },
+          onSpeechEnd: () => setActiveSpeaker((s) => (s === "User" ? null : s)),
+          onClipStart: (clip) => {
+            setActiveSpeaker(clip.speaker);
+            if (clip.turnId !== null) {
+              startedTurnsRef.current.add(clip.turnId);
+              releaseLine(clip.turnId);
+            }
+          },
+          onClipEnd: (clip) => {
+            send(
+              clip.turnId !== null
+                ? { type: "playback_finished", turn_id: clip.turnId }
+                : { type: "playback_finished" },
+            );
+            // Open the mic the moment the question ends; the server confirms with turn_update.
+            if (clip.yieldsFloor) applyFloor("user", clip.speaker);
+          },
+          onPlaybackIdle: () =>
+            setActiveSpeaker((s) => (s !== null && s !== "User" ? null : s)),
         },
-        onSpeechEnd: () => setActiveSpeaker((s) => (s === "User" ? null : s)),
-        onAgentAudioStart: (speaker) => setActiveSpeaker(speaker),
-        onAgentAudioIdle: () =>
-          setActiveSpeaker((s) => (s !== null && s !== "User" ? null : s)),
-      });
+        options.language,
+      );
       engineRef.current = engine;
 
       try {
@@ -566,13 +737,12 @@ export function useGDSocket({
       }
       if (session !== sessionRef.current) return; // torn down while awaiting
 
-      const wsUrl = normalizeWsUrl(url || DEFAULT_GD_WS_URL);
-      const ws = new WebSocket(wsUrl);
+      const ws = new WebSocket(url);
       wsRef.current = ws;
 
       ws.onopen = () => {
         send({ type: "start_session", ...options });
-        engine.streaming = true;
+        applyFloor("panel");
         setConnectionStatus("connected");
       };
 
@@ -587,25 +757,47 @@ export function useGDSocket({
         if (!isServerMessage(msg)) return;
 
         switch (msg.type) {
-          case "transcript_update":
-            setTranscriptList((list) => [...list, msg]);
+          case "transcript_update": {
+            const turnId = msg.turn_id;
+            if (msg.speaker === "User" || turnId == null || startedTurnsRef.current.has(turnId)) {
+              appendLine(msg);
+            } else {
+              heldLinesRef.current.set(turnId, {
+                entry: msg,
+                timer: setTimeout(() => releaseLine(turnId), TRANSCRIPT_HOLD_MAX_MS),
+              });
+            }
             break;
+          }
           case "agent_speaking":
             setSpeakerAvatars((m) =>
               m[msg.speaker] === msg.avatar_id ? m : { ...m, [msg.speaker]: msg.avatar_id },
             );
-            engine.enqueue(msg.audio_base64, msg.speaker);
+            engine.enqueue(
+              msg.audio_base64,
+              msg.speaker,
+              msg.turn_id ?? null,
+              msg.text ?? "",
+              msg.yields_floor === true,
+            );
             break;
           case "agent_interrupted":
             engine.stopPlayback();
+            releaseAllLines();
+            break;
+          case "turn_update":
+            applyFloor(msg.floor, msg.speaker ?? null);
             break;
           case "timer_tick":
             setTimeLeft(msg.seconds_left);
             break;
           case "final_report":
+            releaseAllLines();
             setReportData(msg);
             setTimeLeft(0);
             teardown();
+            setFloor(null);
+            setFloorAsker(null);
             setConnectionStatus("disconnected");
             break;
           default:
@@ -614,7 +806,7 @@ export function useGDSocket({
       };
 
       ws.onerror = () => {
-        setError(`WebSocket error (${wsUrl}).`);
+        setError(`WebSocket error (${url}).`);
         setConnectionStatus("error");
       };
 
@@ -624,13 +816,14 @@ export function useGDSocket({
         engineRef.current?.dispose();
         engineRef.current = null;
         setActiveSpeaker(null);
+        setFloor(null);
         setConnectionStatus((s) => (s === "error" ? s : "disconnected"));
         if (!event.wasClean && event.code !== 1000) {
           setError((e) => e ?? `Connection closed unexpectedly (code ${event.code}).`);
         }
       };
     },
-    [send, teardown, url],
+    [appendLine, applyFloor, releaseAllLines, releaseLine, send, teardown, url],
   );
 
   const endSession = useCallback(() => {
@@ -638,6 +831,7 @@ export function useGDSocket({
     engine?.stopCapture();
     engine?.stopPlayback();
     setActiveSpeaker(null);
+    applyFloor(null);
 
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
       teardown();
@@ -653,7 +847,7 @@ export function useGDSocket({
       setConnectionStatus("disconnected");
       setError((e) => e ?? "Timed out waiting for the final report.");
     }, REPORT_TIMEOUT_MS);
-  }, [send, teardown]);
+  }, [applyFloor, send, teardown]);
 
   const getAudioLevels = useCallback(
     (): AudioLevels => engineRef.current?.getLevels() ?? { user: 0, agent: 0 },
@@ -667,6 +861,8 @@ export function useGDSocket({
     timeLeft,
     reportData,
     error,
+    floor,
+    floorAsker,
     speakerAvatars,
     getAudioLevels,
     startSession,

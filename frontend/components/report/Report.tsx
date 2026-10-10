@@ -251,7 +251,7 @@ function deriveBalance({ config, report, transcript, speakerAvatars }: StoredSes
   const userPct = clampPct(report.metrics.speaking_time_user_percent);
 
   // Prefer the evaluator's measured split when the backend sends one.
-  const dist = report.speaking_time_distribution;
+  const dist = report.metrics.speaking_time_distribution;
   if (dist && Object.keys(dist).some((k) => k !== "User")) {
     const rows: BalanceRow[] = [
       { key: "user", name: "You", seat: USER_SEAT, percent: userPct, isUser: true },

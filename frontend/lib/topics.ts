@@ -23,7 +23,6 @@ export const ABSTRACT_TOPICS = [
 ] as const;
 
 export const LANGUAGES = [
-  { value: "en-IN", label: "English (India)" },
-  { value: "en-US", label: "English (US)" },
-  { value: "en-GB", label: "English (UK)" },
+  { value: "en-IN", label: "English" },
+  { value: "hi-IN", label: "Hindi + English (Hinglish)" },
 ] as const;

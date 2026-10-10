@@ -40,7 +40,12 @@ class Settings(BaseSettings):
     # GD Engine Parameters
     PAUSE_THRESHOLD: float = 2.5
     DEFAULT_SESSION_DURATION: int = 420
-    CANDIDATE_SILENCE_THRESHOLD: float = 75.0  # 75s (1.25 mins) silence nudge threshold
+    CANDIDATE_SILENCE_THRESHOLD: float = 75.0  # legacy; the turn engine now uses the floor timeouts below
+
+    # Floor handoff: the candidate speaks only when a panelist asks them to.
+    CANDIDATE_RESPONSE_TIMEOUT: float = 1.5  # silence after a question before "can you hear me?"
+    CHECKIN_REPLY_TIMEOUT: float = 6.0  # silence after the check-in before the panel moves on
+    USER_TURN_END_SILENCE: float = 0.8  # gap after the last audio chunk that ends the candidate's turn
 
     model_config = SettingsConfigDict(
         env_file=(BASE_DIR / ".env", ".env"),

@@ -60,7 +60,7 @@ def test_websocket_gd_session_flow():
 
         # 5. Receive until final_report is caught
         final_report_found = False
-        for _ in range(5):
+        for _ in range(40):
             try:
                 data = websocket.receive_text()
                 msg = json.loads(data)

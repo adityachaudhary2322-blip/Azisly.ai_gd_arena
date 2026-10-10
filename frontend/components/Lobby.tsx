@@ -27,6 +27,8 @@ export function Lobby() {
   const [custom, setCustom] = useState("");
   const [panelSize, setPanelSize] = useState(3);
   const [language, setLanguage] = useState<string>(LANGUAGES[0].value);
+  const [field, setField] = useState("");
+  const [interests, setInterests] = useState("");
 
   const topic = (category === "custom" ? custom : preset).trim();
   const panel = panelForSize(panelSize);
@@ -42,7 +44,11 @@ export function Lobby() {
     if (!topic) return;
     // Started inside the click so the browser allows mic + audio playback;
     // the arena renders connecting/error states from shared session state.
-    void startSession({ topic, panel_size: panelSize, language });
+    const profile =
+      field.trim() || interests.trim()
+        ? { field: field.trim(), interests: interests.trim() }
+        : undefined;
+    void startSession({ topic, panel_size: panelSize, language, profile });
     router.push("/arena");
   }
 
@@ -59,8 +65,8 @@ export function Lobby() {
           Set up your group discussion
         </h1>
         <p className="max-w-2xl text-lg text-muted">
-          Pick a topic and a panel. You&apos;ll speak live with AI participants. Cut in
-          whenever you have a point, then get a detailed evaluation.
+          Pick a topic and a panel. The AI panelists discuss it live and turn to you with
+          questions along the way. Answer by voice, then get a detailed evaluation.
         </p>
       </header>
 
@@ -211,6 +217,42 @@ export function Lobby() {
             </div>
           </fieldset>
 
+          <fieldset className="space-y-4 rounded-xl border border-border bg-surface p-5 sm:p-6">
+            <legend className="sr-only">About you</legend>
+            <div>
+              <h2 className="text-lg font-semibold" aria-hidden>
+                3. About you <span className="text-sm font-normal text-subtle">(optional)</span>
+              </h2>
+              <p className="mt-1 text-sm text-subtle">The panel tailors its questions to you.</p>
+            </div>
+            <div className="space-y-2">
+              <label htmlFor={`${ids}-field`} className="block text-sm font-medium text-muted">
+                Your tech field
+              </label>
+              <input
+                id={`${ids}-field`}
+                value={field}
+                onChange={(e) => setField(e.target.value)}
+                maxLength={80}
+                placeholder="e.g. Backend engineering"
+                className="w-full rounded-lg border border-border-strong bg-background px-3 py-2.5 text-foreground placeholder:text-subtle focus:border-primary"
+              />
+            </div>
+            <div className="space-y-2">
+              <label htmlFor={`${ids}-interests`} className="block text-sm font-medium text-muted">
+                Topics you know well
+              </label>
+              <input
+                id={`${ids}-interests`}
+                value={interests}
+                onChange={(e) => setInterests(e.target.value)}
+                maxLength={200}
+                placeholder="e.g. Kafka, system design, fintech"
+                className="w-full rounded-lg border border-border-strong bg-background px-3 py-2.5 text-foreground placeholder:text-subtle focus:border-primary"
+              />
+            </div>
+          </fieldset>
+
           <button
             type="submit"
             disabled={!topic}
@@ -221,8 +263,9 @@ export function Lobby() {
           </button>
           <p className="flex items-start gap-2 text-sm text-subtle">
             <Mic aria-hidden className="mt-0.5 size-4 shrink-0" />
-            Your browser will ask for microphone access. Headphones prevent the panel&apos;s
-            voices from triggering interruptions.
+            Your browser will ask for microphone access. The panel will turn to you with a
+            question when it&apos;s your turn to speak. Say &ldquo;I&apos;d like to continue
+            another day&rdquo; anytime you answer to wrap up with a summary.
           </p>
         </div>
       </form>

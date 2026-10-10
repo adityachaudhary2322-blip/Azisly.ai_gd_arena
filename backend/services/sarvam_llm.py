@@ -90,6 +90,103 @@ MOCK_EVALUATION_REPORT: Dict[str, Any] = {
 }
 
 
+# Further mock lines so a mock-mode discussion does not repeat itself every turn.
+MOCK_EXTRA_DIALOGUE_EN: Dict[str, List[str]] = {
+    "moderator": [
+        "We have two clear camps forming here, so let's test where they actually disagree.",
+        "Let's bring this back to the core question and look at who bears the cost.",
+    ],
+    "dominator": [
+        "Honestly, that sounds nice on paper, but companies won't wait for anyone to catch up.",
+        "I'll push back again, because playing safe is exactly how firms lose the market.",
+    ],
+    "data_driven": [
+        "The numbers tell a more nuanced story; reskilling programs show around 60% placement rates.",
+        "If we look at five-year trends, adoption is fastest exactly where wages are highest.",
+    ],
+    "bridger": [
+        "Both of you are right in parts, and the overlap is really about timing.",
+        "Maybe the real answer combines Kabir's urgency with Anushka's evidence on transitions.",
+    ],
+    "quiet_analyst": [
+        "The second-order effect matters more: who trains the next generation if entry roles vanish?",
+        "In ten years the question won't be jobs lost, but which skills compound in value.",
+    ],
+}
+
+MOCK_EXTRA_DIALOGUE_HI: Dict[str, List[str]] = {
+    "moderator": ["Chaliye dekhte hain ki asli disagreement kahan hai."],
+    "dominator": ["Sach kahun toh companies kisi ka intezaar nahi karengi."],
+    "data_driven": ["Data dikhata hai ki reskilling programs mein lagbhag 60% placement hota hai."],
+    "bridger": ["Aap dono kuch had tak sahi hain, asli sawaal timing ka hai."],
+    "quiet_analyst": ["Lambi avadhi mein sawaal yeh hoga ki kaunse skills ki value badhegi."],
+}
+
+MOCK_INVITE_EN: Dict[str, str] = {
+    "moderator": "We haven't heard from you yet. What's your view on the biggest risk here?",
+    "dominator": "So tell me, do you really think caution wins in a market moving this fast?",
+    "data_driven": "Which data point would change your mind on this, if any?",
+    "bridger": "You've been listening closely. Where do you see the middle ground?",
+    "quiet_analyst": "Looking five years ahead, what do you think matters most here?",
+}
+
+MOCK_INVITE_HI: Dict[str, str] = {
+    "moderator": "Humne abhi tak aapki raay nahi suni. Aapke hisaab se sabse bada risk kya hai?",
+    "dominator": "Toh aap batayiye, kya itni tez market mein caution kaam karega?",
+    "data_driven": "Kaunsa data aapki raay badal sakta hai?",
+    "bridger": "Aapke hisaab se middle ground kya ho sakta hai?",
+    "quiet_analyst": "Paanch saal aage dekhein toh aapko kya sabse zaroori lagta hai?",
+}
+
+MOCK_REACT_EN: Dict[str, str] = {
+    "moderator": "That's a useful framing, and it shifts the focus to execution.",
+    "dominator": "I'd challenge that, because markets rarely reward waiting it out.",
+    "data_driven": "That lines up with the data, though the effect varies a lot by sector.",
+    "bridger": "I like that, and it connects nicely with what Kabir said earlier.",
+    "quiet_analyst": "That raises a deeper question about who adapts and who gets left behind.",
+}
+
+MOCK_REACT_HI: Dict[str, str] = {
+    "moderator": "Yeh ek accha framing hai, isse focus execution par aata hai.",
+    "dominator": "Main isse challenge karunga, market kabhi intezaar ko reward nahi karti.",
+    "data_driven": "Yeh data se match karta hai, lekin har sector mein farak hai.",
+    "bridger": "Mujhe yeh pasand aaya, yeh Kabir ki baat se bhi judta hai.",
+    "quiet_analyst": "Isse ek gehra sawaal uthta hai ki kaun adapt karega.",
+}
+
+MOCK_SUMMARY_EN = (
+    "Let me sum up today. We weighed speed against caution, looked at the data on reskilling, "
+    "and you added a clear perspective of your own. Thank you all, and we'll continue another day."
+)
+MOCK_SUMMARY_HI = (
+    "Aaj ki charcha ka saar yeh hai ki humne speed aur caution dono par baat ki, data dekha, "
+    "aur aapne apna spasht nazariya rakha. Aap sabhi ka dhanyavaad, hum kisi aur din aage badhenge."
+)
+
+_PERSONA_KEYS = (
+    ("moderator", ("arjun", "moderator")),
+    ("dominator", ("kabir", "dominator")),
+    ("data_driven", ("anushka", "data_driven", "data-driven")),
+    ("bridger", ("priya", "bridger")),
+    ("quiet_analyst", ("rohan", "quiet_analyst", "quiet analyst")),
+)
+
+
+def _match_persona(text: str) -> Optional[str]:
+    for key, needles in _PERSONA_KEYS:
+        if any(n in text for n in needles):
+            return key
+    return None
+
+
+def _history_length(user_text: str) -> int:
+    """Count dialogue lines in the prompt; used to vary mock lines deterministically."""
+    if "recent dialogue:" not in user_text:
+        return 0
+    block = user_text.split("recent dialogue:", 1)[1].split("\n\n", 1)[0]
+    return sum(1 for line in block.splitlines() if ":" in line)
+
+
 def _detect_mock_response(messages: List[Dict[str, str]]) -> str:
     """Select appropriate deterministic mock text based on message contents and target language."""
     full_text = " ".join(m.get("content", "") for m in messages).lower()
@@ -101,20 +198,25 @@ def _detect_mock_response(messages: List[Dict[str, str]]) -> str:
     # Determine dialogue bank based on language indicator
     is_hindi = "hi-in" in full_text or "hindi" in full_text or "hinglish" in full_text
     dialogues = MOCK_PERSONA_DIALOGUE_HI if is_hindi else MOCK_PERSONA_DIALOGUE_EN
+    extras = MOCK_EXTRA_DIALOGUE_HI if is_hindi else MOCK_EXTRA_DIALOGUE_EN
 
-    # Check for specific persona system prompts or names
-    if "arjun" in full_text or "moderator" in full_text:
-        return dialogues["moderator"]
-    if "kabir" in full_text or "dominator" in full_text:
-        return dialogues["dominator"]
-    if "anushka" in full_text or "data_driven" in full_text or "data-driven" in full_text:
-        return dialogues["data_driven"]
-    if "priya" in full_text or "bridger" in full_text:
-        return dialogues["bridger"]
-    if "rohan" in full_text or "quiet_analyst" in full_text or "quiet analyst" in full_text:
-        return dialogues["quiet_analyst"]
+    # Identify the speaker from the system prompt first: the dialogue history
+    # mentions every panelist's name, so searching it would pick the wrong one.
+    system_text = " ".join(m.get("content", "") for m in messages if m.get("role") == "system").lower()
+    user_text = " ".join(m.get("content", "") for m in messages if m.get("role") != "system").lower()
+    persona = _match_persona(system_text) or _match_persona(full_text)
+    if persona is None:
+        return MOCK_DEFAULT_REPLY
 
-    return MOCK_DEFAULT_REPLY
+    if "summarize today" in user_text:
+        return MOCK_SUMMARY_HI if is_hindi else MOCK_SUMMARY_EN
+    if "ask the candidate" in user_text:
+        return (MOCK_INVITE_HI if is_hindi else MOCK_INVITE_EN)[persona]
+    if "the candidate just spoke" in user_text:
+        return (MOCK_REACT_HI if is_hindi else MOCK_REACT_EN)[persona]
+
+    bank = [dialogues[persona], *extras.get(persona, [])]
+    return bank[_history_length(user_text) % len(bank)]
 
 
 async def get_sarvam_completion(

@@ -75,6 +75,23 @@ body {
   transform: scale(calc(1.04 + var(--level) * 0.1));
 }
 
+/* Candidate's seat while it is their turn but they haven't started speaking. */
+.seat-ring[data-awaiting] {
+  animation: seat-awaiting 1.4s ease-in-out infinite;
+}
+
+@keyframes seat-awaiting {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px var(--seat);
+  }
+  50% {
+    box-shadow:
+      0 0 0 6px var(--seat),
+      0 0 24px 6px color-mix(in oklab, var(--seat) 50%, transparent);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

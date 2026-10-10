@@ -42,6 +42,13 @@ LANGUAGE_PROMPTS: Dict[str, str] = {
 }
 
 
+CONVERSATION_STYLE = (
+    "Speak the way people really talk in a live group discussion: plain spoken words, contractions, "
+    "no lists or headings, no filler openers like 'Great point' or 'Absolutely'. Vary how you start "
+    "your sentences, and keep it brief so others can respond."
+)
+
+
 @dataclass(frozen=True)
 class Persona:
     """Represents a GD AI Participant personality profile."""
@@ -58,23 +65,62 @@ class Persona:
         topic: str,
         recent_transcripts: List[Dict[str, str]],
         language: str = "en-IN",
+        mode: str = "discuss",
+        candidate_profile: str = "",
     ) -> List[Dict[str, str]]:
-        """Format the conversational message history for Sarvam Chat LLM with language constraints."""
+        """Format the conversational message history for Sarvam Chat LLM with language constraints.
+
+        mode:
+          - "discuss": continue the panel conversation.
+          - "invite": make a point, then hand the floor to the candidate with a direct question.
+          - "react": respond to what the candidate just said.
+        """
         history_lines = [
-            f"{t.get('speaker', 'Participant')}: {t.get('text', '')}"
-            for t in recent_transcripts[-5:]
+            f"{'Candidate' if t.get('speaker') == 'User' else t.get('speaker', 'Participant')}: {t.get('text', '')}"
+            for t in recent_transcripts[-8:]
         ]
         history_str = "\n".join(history_lines) if history_lines else "(Discussion just commenced)"
 
         lang_instruction = LANGUAGE_PROMPTS.get(language, LANGUAGE_PROMPTS["en-IN"])
-        system_content = f"{self.system_prompt}\n\n{lang_instruction}"
+        system_content = f"{self.system_prompt}\n\n{CONVERSATION_STYLE}\n\n{lang_instruction}"
 
+        if mode == "summary":
+            task = (
+                f"The candidate wants to stop for today. As {self.name}, summarize today's discussion "
+                "in 2 to 3 spoken sentences: the main viewpoints, what the candidate contributed, and "
+                "thank everyone, saying we can continue another day. Under 60 words."
+            )
+        elif mode == "invite":
+            task = (
+                f"Respond as {self.name}: make one short point, then turn to the candidate and ask the candidate "
+                "one specific, open question about the discussion, addressing them as 'you'. "
+                "Under 35 words in total, and end with a question mark."
+            )
+        elif mode == "react":
+            task = (
+                f"The candidate just spoke. Respond as {self.name} to the candidate's point specifically: "
+                "agree, challenge, or build on it. A brief acknowledgement was already spoken, so go straight "
+                "to substance. 1 to 2 spoken sentences, under 30 words."
+            )
+        else:
+            task = (
+                f"Continue the discussion as {self.name}: react to the last speaker (you may name them), "
+                "add one fresh point, and do not repeat earlier points. 1 to 2 spoken sentences, under 30 words."
+            )
+
+        profile_line = (
+            f"About the candidate: {candidate_profile}. Where it fits naturally, connect your question "
+            "or response to their background.\n"
+            if candidate_profile and mode in ("invite", "react")
+            else ""
+        )
         user_content = (
             f"GD Topic: \"{topic}\"\n"
             f"Target Language Code: {language}\n"
+            f"{profile_line}"
             f"Recent Dialogue:\n{history_str}\n\n"
-            f"Respond directly as {self.name} in the target language. Give exactly 1 to 2 spoken sentences (under 30 words). "
-            f"Do NOT include markdown, asterisks, or any '{self.name}:' prefix."
+            f"{task} Reply in the target language. "
+            f"Do NOT include markdown, asterisks, stage directions, or any '{self.name}:' prefix."
         )
 
         return [

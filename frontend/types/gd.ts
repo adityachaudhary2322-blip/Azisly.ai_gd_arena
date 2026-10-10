@@ -29,8 +29,17 @@ export interface StartSession {
   type: "start_session";
   topic: string;
   panel_size: number;
-  /** BCP-47 tag, e.g. "en-IN". */
+  /** BCP-47 tag, e.g. "en-IN"; "hi-IN" is Hindi + English (Hinglish). */
   language: string;
+  /** Optional background used to tailor panel questions. */
+  profile?: CandidateProfile;
+}
+
+export interface CandidateProfile {
+  /** e.g. "Backend engineering". */
+  field?: string;
+  /** e.g. "Kafka, system design, fintech". */
+  interests?: string;
 }
 
 export interface AudioChunk {
@@ -39,6 +48,13 @@ export interface AudioChunk {
   data: string;
 }
 
+/** Sent when a clip finishes playing (`turn_id` from its `agent_speaking`). */
+export interface PlaybackFinished {
+  type: "playback_finished";
+  turn_id?: number;
+}
+
+/** Legacy barge-in; this client no longer sends it (the panel hands over the floor). */
 export interface UserInterrupted {
   type: "user_interrupted";
 }
@@ -50,6 +66,7 @@ export interface EndSession {
 export type ClientMessage =
   | StartSession
   | AudioChunk
+  | PlaybackFinished
   | UserInterrupted
   | EndSession;
 
@@ -63,6 +80,8 @@ export interface TranscriptUpdate {
   text: string;
   /** Seconds since session start. */
   timestamp: number;
+  /** Pairs a panelist's line with its `agent_speaking` clip; absent for the candidate. */
+  turn_id?: number;
 }
 
 export interface AgentSpeaking {
@@ -72,6 +91,19 @@ export interface AgentSpeaking {
   avatar_id: AvatarId | (string & {});
   /** Base64-encoded WAV or MP3. */
   audio_base64: string;
+  turn_id?: number;
+  /** What the clip says; used to speak it if the audio is a silent placeholder. */
+  text?: string;
+  /** True when this clip ends by handing the floor to the candidate. */
+  yields_floor?: boolean;
+}
+
+/** Who holds the floor. The candidate may speak only while it is "user". */
+export interface TurnUpdate {
+  type: "turn_update";
+  floor: "user" | "panel";
+  /** Panelist who handed over the floor (when floor is "user"). */
+  speaker?: AgentName;
 }
 
 export interface AgentInterrupted {
@@ -88,6 +120,8 @@ export interface ReportMetrics {
   speaking_time_user_percent: number;
   interruptions_handled: number;
   initiative_score: number;
+  /** Speaker name ("User" for the candidate) -> percent of speaking time. */
+  speaking_time_distribution?: Record<string, number>;
 }
 
 export interface FeedbackItem {
@@ -100,16 +134,12 @@ export interface FinalReport {
   type: "final_report";
   metrics: ReportMetrics;
   feedback: FeedbackItem[];
-  /**
-   * Speaker name ("User" for the candidate) -> percent of speaking time.
-   * Confirmed by the backend but not yet in SCHEMA.md; shape assumed.
-   */
-  speaking_time_distribution?: Record<string, number>;
 }
 
 export type ServerMessage =
   | TranscriptUpdate
   | AgentSpeaking
   | AgentInterrupted
+  | TurnUpdate
   | TimerTick
   | FinalReport;

@@ -12,18 +12,27 @@ interface SeatAvatarProps {
   seat: Seat;
   size?: keyof typeof SIZES;
   active?: boolean;
+  /** Pulse gently to show this seat is expected to speak next. */
+  awaiting?: boolean;
   /** Receives the ring element so callers can drive `--level` (0–1) per frame. */
   ringRef?: Ref<HTMLDivElement>;
 }
 
 /** Circular persona avatar; when `active`, its ring glows in proportion to `--level`. */
-export function SeatAvatar({ seat, size = "md", active = false, ringRef }: SeatAvatarProps) {
+export function SeatAvatar({
+  seat,
+  size = "md",
+  active = false,
+  awaiting = false,
+  ringRef,
+}: SeatAvatarProps) {
   const Icon = seat.icon;
   return (
     <div
       ref={ringRef}
       className={`seat-ring ${SIZES[size]} flex shrink-0 items-center justify-center rounded-full bg-surface-raised`}
       data-active={active || undefined}
+      data-awaiting={awaiting || undefined}
       style={{ "--seat": seat.color } as React.CSSProperties}
       aria-hidden
     >

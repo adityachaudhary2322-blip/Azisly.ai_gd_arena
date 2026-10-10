@@ -5,6 +5,7 @@ import {
   LoaderCircle,
   MessageSquareText,
   Mic,
+  MicOff,
   PhoneOff,
   Timer,
   TriangleAlert,
@@ -41,6 +42,8 @@ export function Arena() {
     timeLeft,
     reportData,
     error,
+    floor,
+    floorAsker,
     endSession,
     getAudioLevels,
   } = useGDSession();
@@ -71,6 +74,7 @@ export function Arena() {
   }
 
   const live = connectionStatus === "connected";
+  const yourTurn = live && floor === "user";
   const waitingForReport = ending && !reportData && connectionStatus !== "error";
   const lowTime = timeLeft !== null && timeLeft <= 60;
 
@@ -130,16 +134,23 @@ export function Arena() {
               className="absolute inset-[22%] rounded-full border border-border bg-[radial-gradient(circle_at_50%_40%,var(--color-surface-raised),var(--color-surface)_70%)]"
             />
             <div className="absolute inset-[26%] flex flex-col items-center justify-center gap-1 text-center">
-              <p className="text-xs font-medium uppercase tracking-widest text-subtle">Now speaking</p>
+              <p className="text-xs font-medium uppercase tracking-widest text-subtle">
+                {yourTurn && activeSeat?.id !== "user" ? "Your turn" : "Now speaking"}
+              </p>
               <p className="text-base font-semibold sm:text-xl" aria-live="polite">
                 {activeSeat
                   ? activeSeat.id === "user"
                     ? "You"
                     : `${activeSpeaker} · ${activeSeat.label}`
-                  : live
-                    ? "—"
-                    : STATUS_LABEL[connectionStatus]}
+                  : yourTurn
+                    ? "Go ahead, speak now"
+                    : live
+                      ? "—"
+                      : STATUS_LABEL[connectionStatus]}
               </p>
+              {yourTurn && floorAsker && activeSeat?.id !== "user" && (
+                <p className="text-xs text-muted sm:text-sm">Answer {floorAsker}&apos;s question</p>
+              )}
             </div>
 
             <ul aria-label="Participants">
@@ -162,6 +173,7 @@ export function Arena() {
                       seat={seat}
                       size="lg"
                       active={active}
+                      awaiting={seat.id === "user" && yourTurn && !active}
                       ringRef={(el) => {
                         ringEls.set(seat.id, el);
                       }}
@@ -183,12 +195,19 @@ export function Arena() {
         {/* Controls */}
         <footer className="flex items-center justify-center gap-2 border-t border-border px-4 py-4">
           <span
-            className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm ${
-              live ? "bg-accent/15 text-accent" : "bg-surface-raised text-subtle"
+            role="status"
+            className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm whitespace-nowrap ${
+              yourTurn ? "bg-accent/15 text-accent" : "bg-surface-raised text-subtle"
             }`}
           >
-            <Mic aria-hidden className="size-4" />
-            <span className="sr-only sm:not-sr-only">{live ? "Mic on" : "Mic off"}</span>
+            {yourTurn ? (
+              <Mic aria-hidden className="size-4" />
+            ) : (
+              <MicOff aria-hidden className="size-4" />
+            )}
+            <span className="sr-only sm:not-sr-only">
+              {yourTurn ? "Your turn · mic on" : live ? "Listening to the panel" : "Mic off"}
+            </span>
           </span>
           <button
             type="button"
