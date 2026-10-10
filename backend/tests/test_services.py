@@ -3,7 +3,7 @@
 import base64
 import pytest
 import httpx
-from backend.config import Settings, settings
+from backend.config import Settings, settings, SUPPORTED_LANGUAGES
 from backend.services.sarvam_stt import (
     transcribe_audio_bytes,
     pcm_to_wav_bytes,
@@ -12,13 +12,16 @@ from backend.services.sarvam_stt import (
 from backend.services.sarvam_tts import (
     synthesize_speech,
     resolve_speaker,
+    ensure_wav_base64,
+    to_audio_data_uri,
     AVATAR_TO_VOICE_MAP,
     MOCK_AUDIO_PAYLOAD,
 )
 from backend.services.sarvam_llm import (
     get_sarvam_completion,
     _detect_mock_response,
-    MOCK_PERSONA_DIALOGUE,
+    MOCK_PERSONA_DIALOGUE_EN,
+    MOCK_PERSONA_DIALOGUE_HI,
 )
 
 
@@ -35,6 +38,9 @@ def test_settings_pure_sarvam_defaults():
     assert settings.SARVAM_STT_URL == "https://api.sarvam.ai/speech-to-text"
     assert settings.SARVAM_TTS_URL == "https://api.sarvam.ai/text-to-speech"
     assert settings.SARVAM_LLM_URL == "https://api.sarvam.ai/v1/chat/completions"
+    assert settings.CANDIDATE_SILENCE_THRESHOLD == 75.0
+    assert "hi-IN" in SUPPORTED_LANGUAGES
+    assert "ta-IN" in SUPPORTED_LANGUAGES
 
 
 def test_settings_empty_env_fallback():
@@ -65,13 +71,13 @@ def test_pcm_to_wav_bytes():
 async def test_sarvam_stt_mock_mode():
     """Verify STT returns mock transcription in mock mode."""
     dummy_pcm = b"\x00\x01\x02\x03" * 100
-    transcript = await transcribe_audio_bytes(dummy_pcm, language_code="en-IN")
+    transcript = await transcribe_audio_bytes(dummy_pcm, language_code="hi-IN")
     assert transcript == MOCK_TRANSCRIPTION
 
 
 @pytest.mark.asyncio
 async def test_sarvam_stt_api_success(monkeypatch):
-    """Verify STT API call with Saaras v4 and multipart payload."""
+    """Verify STT API call with Saaras v4 and Indic language code."""
     monkeypatch.setattr(settings, "MOCK_VOICE", False)
     monkeypatch.setattr(settings, "SARVAM_API_KEY", "real-sarvam-key")
 
@@ -85,12 +91,12 @@ async def test_sarvam_stt_api_success(monkeypatch):
 
     transport = httpx.MockTransport(mock_handler)
     async with httpx.AsyncClient(transport=transport) as client:
-        result = await transcribe_audio_bytes(b"dummy_pcm", client=client)
+        result = await transcribe_audio_bytes(b"dummy_pcm", language_code="ta-IN", client=client)
         assert result == expected_text
 
 
 # ---------------------------------------------------------------------------
-# Sarvam TTS & Voice Mapping Tests (5 Personas)
+# Sarvam TTS & Voice Mapping Tests (5 Personas & WAV Headers)
 # ---------------------------------------------------------------------------
 
 def test_sarvam_tts_voice_resolution():
@@ -111,28 +117,58 @@ def test_sarvam_tts_voice_resolution():
     assert resolve_speaker("Rohan") == "arvind"
 
 
+def test_ensure_wav_base64_encapsulation():
+    """Verify ensure_wav_base64 wraps raw PCM base64 into a valid WAV header."""
+    # Raw PCM bytes without RIFF header
+    raw_pcm = b"\x00\x00" * 800
+    raw_b64 = base64.b64encode(raw_pcm).decode("utf-8")
+    assert not raw_pcm.startswith(b"RIFF")
+
+    wav_b64 = ensure_wav_base64(raw_b64)
+    decoded_wav = base64.b64decode(wav_b64)
+    assert decoded_wav.startswith(b"RIFF")
+    assert b"WAVE" in decoded_wav[:12]
+
+    # Data URI formatter
+    data_uri = to_audio_data_uri(wav_b64)
+    assert data_uri.startswith("data:audio/wav;base64,")
+
+
 @pytest.mark.asyncio
 async def test_sarvam_tts_mock_mode_all_personas():
-    """Verify TTS returns valid base64 WAV payload for all 5 personas."""
+    """Verify TTS returns valid base64 WAV payload with RIFF header for all 5 personas."""
     personas = ["moderator", "dominator", "data_driven", "bridger", "quiet_analyst"]
     for persona in personas:
         audio_b64 = await synthesize_speech(
             text="Let us analyze this problem.",
             speaker=persona,
-            language_code="en-IN",
+            language_code="hi-IN",
         )
         assert audio_b64 == MOCK_AUDIO_PAYLOAD
         raw = base64.b64decode(audio_b64)
         assert raw.startswith(b"RIFF")
+        assert b"WAVE" in raw[:12]
+
+    # Test as data URI
+    uri = await synthesize_speech(text="Hello", speaker="moderator", as_data_uri=True)
+    assert uri.startswith("data:audio/wav;base64,")
 
 
 @pytest.mark.asyncio
 async def test_sarvam_tts_api_success(monkeypatch):
-    """Verify TTS API call sends correct speaker and Bulbul v3 model."""
+    """Verify TTS API call sends output_audio_codec='wav' and wraps raw audio if needed."""
     monkeypatch.setattr(settings, "MOCK_VOICE", False)
     monkeypatch.setattr(settings, "SARVAM_API_KEY", "real-sarvam-key")
 
-    mock_b64 = "dGVzdF9hdWRpb19kYXRh"
+    # Simulate Bulbul output with valid WAV header
+    import io, wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00\x00" * 400)
+    mock_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
     def mock_handler(request: httpx.Request) -> httpx.Response:
         import json
@@ -141,27 +177,31 @@ async def test_sarvam_tts_api_success(monkeypatch):
         body = json.loads(request.content)
         assert body["model"] == "bulbul:v3"
         assert body["speaker"] == "shubh"  # dominator -> shubh
+        assert body["language_code"] == "hi-IN"
+        assert body["output_audio_codec"] == "wav"
         return httpx.Response(200, json={"audios": [mock_b64]})
 
     transport = httpx.MockTransport(mock_handler)
     async with httpx.AsyncClient(transport=transport) as client:
-        result = await synthesize_speech("Speed is crucial.", speaker="dominator", client=client)
+        result = await synthesize_speech("Speed is crucial.", speaker="dominator", language_code="hi-IN", client=client)
         assert result == mock_b64
+        decoded = base64.b64decode(result)
+        assert decoded.startswith(b"RIFF")
 
 
 # ---------------------------------------------------------------------------
-# Sarvam Chat / LLM Tests
+# Sarvam Chat / LLM Tests (Hinglish / Indic)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_sarvam_llm_mock_dialogue():
-    """Verify Sarvam LLM returns deterministic persona dialogue in mock mode."""
+async def test_sarvam_llm_mock_dialogue_indic():
+    """Verify Sarvam LLM returns deterministic Hindi/Hinglish persona dialogue in mock mode."""
     messages = [
-        {"role": "system", "content": "You are Kabir, the Dominator."},
-        {"role": "user", "content": "Respond to the topic."},
+        {"role": "system", "content": "You are Kabir, the Dominator. Strict Language Instruction: converse in Hindi / Hinglish."},
+        {"role": "user", "content": "Respond to the topic in hi-IN."},
     ]
     reply = await get_sarvam_completion(messages)
-    assert reply == MOCK_PERSONA_DIALOGUE["dominator"]
+    assert reply == MOCK_PERSONA_DIALOGUE_HI["dominator"]
 
 
 @pytest.mark.asyncio

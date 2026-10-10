@@ -2,6 +2,9 @@
 
 100% Sarvam AI powered (Saaras STT, Sarvam LLM, Bulbul TTS):
 - Tracks elapsed time, conversational floor state, and speaker timestamps.
+- Multi-language Indic support: en-IN, hi-IN, ta-IN, te-IN, bn-IN, kn-IN piped directly to STT and TTS.
+- Candidate silence & inactivity nudge: monitors candidate inactivity (75s threshold) and has
+  Moderator ('Arjun') deliver a formal corporate intervention when floor is free.
 - Generates in-character responses via sarvam_llm.py and synthesizes audio via sarvam_tts.py.
 - Immediate interruption control: sets an abort flag to halt active agent speech on 'user_interrupted'.
 - Activates first N personas (3 to 5) based on panel size.
@@ -15,7 +18,7 @@ import random
 import time
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
-from backend.config import settings
+from backend.config import settings, SUPPORTED_LANGUAGES
 from backend.engine.evaluator import evaluate_session
 from backend.engine.personas import (
     Persona,
@@ -57,6 +60,9 @@ class GDOrchestrator:
         self.last_ai_speaker: Optional[str] = None
         self.interruptions_handled: int = 0
 
+        # Candidate silence tracking
+        self.last_candidate_speech_time: float = 0.0
+
         # Audio buffering (16-bit PCM 16kHz mono chunks)
         self.user_audio_buffer = bytearray()
 
@@ -64,6 +70,7 @@ class GDOrchestrator:
         self.active_turn_task: Optional[asyncio.Task] = None
         self.pause_timer_task: Optional[asyncio.Task] = None
         self.timer_heartbeat_task: Optional[asyncio.Task] = None
+        self.candidate_silence_task: Optional[asyncio.Task] = None
         self.interrupt_event = asyncio.Event()
 
     # -----------------------------------------------------------------------
@@ -99,10 +106,18 @@ class GDOrchestrator:
         panel_size: int = 3,
         language: str = "en-IN",
     ) -> None:
-        """Initialize session and activate the first N panel personas."""
+        """Initialize session and activate the first N panel personas with target language."""
         self.topic = topic
         self.panel_size = max(3, min(5, panel_size))
-        self.language = language
+
+        # Validate and normalize target language
+        target_lang = language.strip()
+        if target_lang in SUPPORTED_LANGUAGES:
+            self.language = target_lang
+        else:
+            logger.warning("Language '%s' not in supported set; defaulting to 'en-IN'", language)
+            self.language = "en-IN"
+
         self.panel = get_active_panel(self.panel_size)
         self.start_time = time.time()
         self.seconds_left = DEFAULT_SESSION_SECONDS
@@ -112,6 +127,7 @@ class GDOrchestrator:
         self.user_audio_buffer.clear()
         self.last_ai_speaker = None
         self.is_ai_speaking = False
+        self.last_candidate_speech_time = time.time()
 
         logger.info(
             "Session initiated: topic='%s', panel_size=%d (%s), language=%s",
@@ -125,12 +141,23 @@ class GDOrchestrator:
         self._cancel_task(self.timer_heartbeat_task)
         self.timer_heartbeat_task = asyncio.create_task(self._run_timer_heartbeat())
 
-        # Moderator delivers opening structure
+        # Start candidate silence monitor (75s inactivity nudge)
+        self._cancel_task(self.candidate_silence_task)
+        self.candidate_silence_task = asyncio.create_task(self._monitor_candidate_silence())
+
+        # Moderator delivers opening structure in target language
         moderator = self.panel[0]
-        opening_prompt = (
-            f"Welcome to this group discussion on '{self.topic}'. "
-            "Let us establish a balanced framework examining both technological potential and socioeconomic impact."
-        )
+        if self.language == "hi-IN":
+            opening_prompt = (
+                f"Aap sabhi ka is group discussion mein swagat hai. Topic hai '{self.topic}'. "
+                "Aaiye hum technological potential aur socioeconomic impact dono pehluon par charcha shuru karein."
+            )
+        else:
+            opening_prompt = (
+                f"Welcome to this group discussion on '{self.topic}'. "
+                "Let us establish a balanced framework examining both technological potential and socioeconomic impact."
+            )
+
         self.active_turn_task = asyncio.create_task(
             self._execute_ai_turn(moderator, forced_text=opening_prompt)
         )
@@ -143,6 +170,7 @@ class GDOrchestrator:
         self.is_active = False
         self._cancel_task(self.timer_heartbeat_task)
         self._cancel_task(self.pause_timer_task)
+        self._cancel_task(self.candidate_silence_task)
         self._cancel_task(self.active_turn_task)
 
         # Flush any remaining speech buffer
@@ -157,6 +185,56 @@ class GDOrchestrator:
         logger.info("Session ended. Dispatched final_report matching SCHEMA.md.")
 
     # -----------------------------------------------------------------------
+    # Candidate Silence & Inactivity Nudge (75s threshold)
+    # -----------------------------------------------------------------------
+
+    async def _monitor_candidate_silence(self) -> None:
+        """Continuously track candidate inactivity. If candidate does not speak for 75s, nudge."""
+        try:
+            while self.is_active:
+                threshold = getattr(settings, "CANDIDATE_SILENCE_THRESHOLD", 75.0)
+                sleep_interval = min(1.0, max(0.05, threshold / 2))
+                await asyncio.sleep(sleep_interval)
+                if not self.is_active:
+                    break
+
+                silence_duration = time.time() - self.last_candidate_speech_time
+
+                if silence_duration >= threshold:
+                    # Check if conversational floor is currently free
+                    if not self.is_ai_speaking:
+                        logger.info(
+                            "Candidate silence (%.1fs) exceeded threshold (%.1fs). Triggering Moderator nudge.",
+                            silence_duration,
+                            threshold,
+                        )
+                        # Reset candidate silence timestamp to prevent immediate repeated nudges
+                        self.last_candidate_speech_time = time.time()
+
+                        moderator = next(
+                            (p for p in self.panel if p.avatar_id == "moderator"),
+                            self.panel[0],
+                        )
+
+                        if self.language == "hi-IN":
+                            nudge_text = (
+                                "Candidate, humne notice kiya ki aapki taraf se brief pause hai. "
+                                "Kya koi audio transmission issue hai, ya aap is premise par apne vichaar share karna chahenge?"
+                            )
+                        else:
+                            nudge_text = (
+                                "Candidate, we've noticed a brief pause. Are there any audio transmission issues on your end, "
+                                "or would you like to introduce your thoughts on the premise?"
+                            )
+
+                        self._cancel_task(self.active_turn_task)
+                        self.active_turn_task = asyncio.create_task(
+                            self._execute_ai_turn(moderator, forced_text=nudge_text)
+                        )
+        except asyncio.CancelledError:
+            pass
+
+    # -----------------------------------------------------------------------
     # Audio Ingestion & Pause Monitoring
     # -----------------------------------------------------------------------
 
@@ -168,6 +246,8 @@ class GDOrchestrator:
         try:
             pcm_chunk = base64.b64decode(base64_data)
             self.user_audio_buffer.extend(pcm_chunk)
+            # Candidate actively sending audio -> update silence timer
+            self.last_candidate_speech_time = time.time()
         except Exception as exc:
             logger.error("Failed to decode base64 audio chunk: %s", exc)
             return
@@ -183,6 +263,9 @@ class GDOrchestrator:
         """Handle user_interrupted signal from client immediately."""
         if not self.is_active:
             return
+
+        # Candidate actively initiated -> update silence timer
+        self.last_candidate_speech_time = time.time()
 
         if self.is_ai_speaking and self.current_speaker:
             interrupted_speaker = self.current_speaker
@@ -237,6 +320,7 @@ class GDOrchestrator:
 
         pcm_bytes = bytes(self.user_audio_buffer)
         self.user_audio_buffer.clear()
+        self.last_candidate_speech_time = time.time()
 
         try:
             transcription = await transcribe_audio_bytes(
@@ -274,7 +358,7 @@ class GDOrchestrator:
         persona: Persona,
         forced_text: Optional[str] = None,
     ) -> None:
-        """Generate dialogue via Sarvam LLM and synthesize voice via Sarvam TTS."""
+        """Generate dialogue via Sarvam LLM and synthesize voice via Sarvam TTS with target language."""
         self.interrupt_event.clear()
         self.is_ai_speaking = True
         self.current_speaker = persona.name
@@ -282,13 +366,14 @@ class GDOrchestrator:
         self.last_ai_speaker = persona.name
 
         try:
-            # 1. Generate text using Sarvam Chat completions
+            # 1. Generate text using Sarvam Chat completions in target language
             if forced_text:
                 dialogue_text = forced_text
             else:
                 messages = persona.format_chat_messages(
                     topic=self.topic,
                     recent_transcripts=self.transcript,
+                    language=self.language,
                 )
                 dialogue_text = await get_sarvam_completion(
                     messages=messages,
@@ -311,7 +396,7 @@ class GDOrchestrator:
                 "timestamp": timestamp,
             })
 
-            # 3. Synthesize speech via Sarvam Bulbul v3 TTS
+            # 3. Synthesize speech via Sarvam Bulbul v3 TTS piping language_code
             audio_base64 = await synthesize_speech(
                 text=dialogue_text,
                 speaker=persona.avatar_id,

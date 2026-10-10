@@ -6,10 +6,40 @@ Provides 5 distinct panelists:
 3. data_driven   ('Anushka', voice: 'anushka'): Analytical skeptic, cites NASSCOM/RBI reports, stats, and metrics.
 4. bridger       ('Priya', voice: 'meera'): Diplomatic synthesizer, active listener, builds on peers' points.
 5. quiet_analyst ('Rohan', voice: 'arvind'): Calm strategic thinker, delivers deep second-order insights.
+
+Supports Indic languages ('en-IN', 'hi-IN', 'ta-IN', 'te-IN', 'bn-IN', 'kn-IN') with strict conversational prompts.
 """
 
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+
+
+LANGUAGE_PROMPTS: Dict[str, str] = {
+    "hi-IN": (
+        "Strict Language Instruction: You MUST converse strictly in Hindi or professional corporate Hinglish "
+        "as naturally spoken in Indian campus placement group discussions. Do NOT reply in pure English."
+    ),
+    "ta-IN": (
+        "Strict Language Instruction: You MUST converse strictly in Tamil or professional Tanglish "
+        "as naturally spoken in corporate and campus group discussions."
+    ),
+    "te-IN": (
+        "Strict Language Instruction: You MUST converse strictly in Telugu or professional conversational Telugu "
+        "as naturally spoken in corporate and campus group discussions."
+    ),
+    "bn-IN": (
+        "Strict Language Instruction: You MUST converse strictly in Bengali "
+        "as naturally spoken in corporate and campus group discussions."
+    ),
+    "kn-IN": (
+        "Strict Language Instruction: You MUST converse strictly in Kannada "
+        "as naturally spoken in corporate and campus group discussions."
+    ),
+    "en-IN": (
+        "Strict Language Instruction: You MUST converse strictly in professional Indian English "
+        "as spoken in top corporate and campus placement group discussions."
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -23,23 +53,32 @@ class Persona:
     turn_weight: float
     system_prompt: str
 
-    def format_chat_messages(self, topic: str, recent_transcripts: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        """Format the conversational message history for Sarvam Chat LLM."""
+    def format_chat_messages(
+        self,
+        topic: str,
+        recent_transcripts: List[Dict[str, str]],
+        language: str = "en-IN",
+    ) -> List[Dict[str, str]]:
+        """Format the conversational message history for Sarvam Chat LLM with language constraints."""
         history_lines = [
             f"{t.get('speaker', 'Participant')}: {t.get('text', '')}"
             for t in recent_transcripts[-5:]
         ]
         history_str = "\n".join(history_lines) if history_lines else "(Discussion just commenced)"
 
+        lang_instruction = LANGUAGE_PROMPTS.get(language, LANGUAGE_PROMPTS["en-IN"])
+        system_content = f"{self.system_prompt}\n\n{lang_instruction}"
+
         user_content = (
             f"GD Topic: \"{topic}\"\n"
+            f"Target Language Code: {language}\n"
             f"Recent Dialogue:\n{history_str}\n\n"
-            f"Respond directly as {self.name}. Give exactly 1 to 2 spoken sentences (under 30 words). "
+            f"Respond directly as {self.name} in the target language. Give exactly 1 to 2 spoken sentences (under 30 words). "
             f"Do NOT include markdown, asterisks, or any '{self.name}:' prefix."
         )
 
         return [
-            {"role": "system", "content": self.system_prompt},
+            {"role": "system", "content": system_content},
             {"role": "user", "content": user_content},
         ]
 
@@ -53,7 +92,7 @@ MODERATOR = Persona(
     system_prompt=(
         "You are Arjun, the Moderator in an Indian campus placement Group Discussion. "
         "Your role is to maintain structural integrity, ensure clear definitions, and guide the panel towards consensus. "
-        "You step in when participants clash or drift off-topic. "
+        "You step in when participants clash or drift off-topic, or when someone is quiet. "
         "Speak in 1-2 concise, spoken sentences (under 30 words). Never use markdown or speaker prefixes."
     ),
 )

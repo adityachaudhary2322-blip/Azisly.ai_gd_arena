@@ -1,15 +1,26 @@
 """Configuration module for GD Arena backend application.
 
 100% pure Sarvam AI ecosystem integration (STT, LLM, TTS).
+Production-ready configuration for Render deployment.
 """
 
+import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Set
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Base directory pointing to backend/
 BASE_DIR = Path(__file__).resolve().parent
+
+SUPPORTED_LANGUAGES: Set[str] = {
+    "en-IN",
+    "hi-IN",
+    "ta-IN",
+    "te-IN",
+    "bn-IN",
+    "kn-IN",
+}
 
 
 class Settings(BaseSettings):
@@ -17,7 +28,8 @@ class Settings(BaseSettings):
 
     SARVAM_API_KEY: str = ""
     MOCK_VOICE: bool = False
-    PORT: int = 8000
+    PORT: int = int(os.getenv("PORT", 8000))
+    HOST: str = os.getenv("HOST", "0.0.0.0")
 
     # Sarvam AI API endpoints
     SARVAM_STT_URL: str = "https://api.sarvam.ai/speech-to-text"
@@ -28,6 +40,7 @@ class Settings(BaseSettings):
     # GD Engine Parameters
     PAUSE_THRESHOLD: float = 2.5
     DEFAULT_SESSION_DURATION: int = 420
+    CANDIDATE_SILENCE_THRESHOLD: float = 75.0  # 75s (1.25 mins) silence nudge threshold
 
     model_config = SettingsConfigDict(
         env_file=(BASE_DIR / ".env", ".env"),

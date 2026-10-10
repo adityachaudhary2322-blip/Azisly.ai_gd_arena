@@ -2,7 +2,7 @@
 
 Exposes:
 - WebSocket endpoint at `/ws/gd` strictly honoring SCHEMA.md.
-- Health check endpoint at `/health`.
+- Production health check endpoint at `/health` for Render.
 """
 
 import json
@@ -25,7 +25,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Enable CORS for frontend integration
+# Enable CORS explicitly for frontend integration (Vercel previews and production)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,9 +37,10 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Lightweight health check endpoint for Render service monitors."""
     return {
         "status": "healthy",
+        "service": "gd-arena-backend",
         "mock_voice": settings.MOCK_VOICE,
         "port": settings.PORT,
     }
@@ -79,3 +80,13 @@ async def websocket_gd_endpoint(websocket: WebSocket):
         logger.error("Unhandled error in WebSocket handler: %s", exc)
     finally:
         await orchestrator.end_session()
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=False,
+    )

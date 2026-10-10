@@ -16,7 +16,23 @@ import type {
 // Config
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_GD_WS_URL = "ws://localhost:8000/ws/gd";
+/**
+ * Normalizes WebSocket connection URLs: converts http(s) to ws(s) if provided.
+ */
+export function normalizeWsUrl(rawUrl: string): string {
+  let url = rawUrl.trim();
+  if (url.startsWith("https://")) {
+    url = url.replace(/^https:\/\//i, "wss://");
+  } else if (url.startsWith("http://")) {
+    url = url.replace(/^http:\/\//i, "ws://");
+  }
+  return url;
+}
+
+export const DEFAULT_GD_WS_URL =
+  process.env.NEXT_PUBLIC_WS_URL && process.env.NEXT_PUBLIC_WS_URL.trim()
+    ? normalizeWsUrl(process.env.NEXT_PUBLIC_WS_URL)
+    : "ws://localhost:8000/ws/gd";
 
 /**
  * Wire format for outgoing `audio_chunk.data`: base64 of raw PCM,
@@ -528,7 +544,8 @@ export function useGDSocket({
       }
       if (session !== sessionRef.current) return; // torn down while awaiting
 
-      const ws = new WebSocket(url);
+      const wsUrl = normalizeWsUrl(url || DEFAULT_GD_WS_URL);
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -575,7 +592,7 @@ export function useGDSocket({
       };
 
       ws.onerror = () => {
-        setError(`WebSocket error (${url}).`);
+        setError(`WebSocket error (${wsUrl}).`);
         setConnectionStatus("error");
       };
 

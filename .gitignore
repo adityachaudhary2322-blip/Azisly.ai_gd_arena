@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+*.pyc
 *.py[cod]
 *$py.class
 *.so
@@ -7,6 +8,7 @@ __pycache__/
 env/
 venv/
 .venv/
+backend/.venv/
 ENV/
 build/
 develop-eggs/
@@ -31,13 +33,23 @@ htmlcov/
 
 # Environment variables
 .env
+backend/.env
+frontend/.env.local
+frontend/.env*.local
 !.env.example
+!backend/.env.example
+!frontend/.env.example
+
+# Node.js / Next.js / Frontend
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+out/
+frontend/out/
 
 # IDE / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-
-backend/.env
-.env

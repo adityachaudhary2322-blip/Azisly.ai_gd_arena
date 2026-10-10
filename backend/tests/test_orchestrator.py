@@ -126,3 +126,60 @@ async def test_orchestrator_panel_size_5():
 
     await orchestrator.end_session()
 
+
+@pytest.mark.asyncio
+async def test_orchestrator_candidate_silence_nudge(monkeypatch):
+    """Verify Moderator intervenes when candidate silence exceeds threshold."""
+    from backend.config import settings
+    monkeypatch.setattr(settings, "CANDIDATE_SILENCE_THRESHOLD", 0.1)
+
+    messages = []
+
+    async def mock_send(msg: dict):
+        messages.append(msg)
+
+    orchestrator = GDOrchestrator(send_callback=mock_send)
+    await orchestrator.start_session(topic="Corporate Governance", panel_size=3)
+
+    # Cancel opening AI turn so floor is immediately free
+    orchestrator._cancel_task(orchestrator.active_turn_task)
+    orchestrator.is_ai_speaking = False
+
+    # Wait for silence threshold to trigger
+    await asyncio.sleep(0.18)
+
+    # Check if Moderator nudge was triggered
+    nudge_msgs = [
+        m for m in messages
+        if m.get("type") == "transcript_update" and "Candidate, we've noticed a brief pause" in m.get("text", "")
+    ]
+    assert len(nudge_msgs) >= 1
+    assert nudge_msgs[0]["speaker"] == "Arjun"
+
+    await orchestrator.end_session()
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_indic_language_flow():
+    """Verify start_session with Indic language (hi-IN) sets language and Hindi opening."""
+    messages = []
+
+    async def mock_send(msg: dict):
+        messages.append(msg)
+
+    orchestrator = GDOrchestrator(send_callback=mock_send)
+    await orchestrator.start_session(topic="Artificial Intelligence", panel_size=3, language="hi-IN")
+
+    assert orchestrator.language == "hi-IN"
+    await asyncio.sleep(0.05)
+
+    hindi_opening = [
+        m for m in messages
+        if m.get("type") == "transcript_update" and "swagat hai" in m.get("text", "")
+    ]
+    assert len(hindi_opening) == 1
+    assert hindi_opening[0]["speaker"] == "Arjun"
+
+    await orchestrator.end_session()
+
+

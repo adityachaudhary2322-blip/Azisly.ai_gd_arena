@@ -2,7 +2,7 @@
 
 Provides asynchronous access to Sarvam's LLM endpoint (sarvam-2b / sarvam-m)
 for persona dialogue generation and post-session GD evaluations.
-Supports deterministic mock bypass when MOCK_VOICE=True or missing API key.
+Supports deterministic mock bypass and multi-language Indic support (en-IN, hi-IN, etc.).
 """
 
 import json
@@ -14,8 +14,8 @@ from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Deterministic dialogue lines per persona for mock mode
-MOCK_PERSONA_DIALOGUE: Dict[str, str] = {
+# Deterministic dialogue lines per persona for English mock mode
+MOCK_PERSONA_DIALOGUE_EN: Dict[str, str] = {
     "moderator": (
         "Let us structure our thoughts into economic impact and ethical considerations "
         "so we maintain a balanced perspective."
@@ -35,6 +35,25 @@ MOCK_PERSONA_DIALOGUE: Dict[str, str] = {
     "quiet_analyst": (
         "Beyond immediate operational efficiency, the real strategic differentiator "
         "lies in long-term institutional resilience."
+    ),
+}
+
+# Deterministic dialogue lines per persona for Hindi / Hinglish mock mode
+MOCK_PERSONA_DIALOGUE_HI: Dict[str, str] = {
+    "moderator": (
+        "Aaiye hum is discussion ko structured tareeqe se aage badhayein aur dono pehluon ko samjhein."
+    ),
+    "dominator": (
+        "Main is point se poori tarah disagree karta hoon; ground reality par execution speed sabse zaroori hai."
+    ),
+    "data_driven": (
+        "Agar hum NASSCOM ke empirical data ko dekhein, toh net 14% growth high-skill jobs mein dikh rahi hai."
+    ),
+    "bridger": (
+        "Main Kabir aur candidate dono ke viewpoints ke beech ek constructive middle ground dekh sakti hoon."
+    ),
+    "quiet_analyst": (
+        "Short-term productivity ke alawa, long-term institutional resilience par focus karna sabse critical hai."
     ),
 }
 
@@ -72,24 +91,28 @@ MOCK_EVALUATION_REPORT: Dict[str, Any] = {
 
 
 def _detect_mock_response(messages: List[Dict[str, str]]) -> str:
-    """Select appropriate deterministic mock text based on message contents."""
+    """Select appropriate deterministic mock text based on message contents and target language."""
     full_text = " ".join(m.get("content", "") for m in messages).lower()
 
     # Check if request is for evaluation or JSON schema report
     if "final_report" in full_text or "evaluat" in full_text or "json" in full_text:
         return json.dumps(MOCK_EVALUATION_REPORT)
 
+    # Determine dialogue bank based on language indicator
+    is_hindi = "hi-in" in full_text or "hindi" in full_text or "hinglish" in full_text
+    dialogues = MOCK_PERSONA_DIALOGUE_HI if is_hindi else MOCK_PERSONA_DIALOGUE_EN
+
     # Check for specific persona system prompts or names
     if "arjun" in full_text or "moderator" in full_text:
-        return MOCK_PERSONA_DIALOGUE["moderator"]
+        return dialogues["moderator"]
     if "kabir" in full_text or "dominator" in full_text:
-        return MOCK_PERSONA_DIALOGUE["dominator"]
+        return dialogues["dominator"]
     if "anushka" in full_text or "data_driven" in full_text or "data-driven" in full_text:
-        return MOCK_PERSONA_DIALOGUE["data_driven"]
+        return dialogues["data_driven"]
     if "priya" in full_text or "bridger" in full_text:
-        return MOCK_PERSONA_DIALOGUE["bridger"]
+        return dialogues["bridger"]
     if "rohan" in full_text or "quiet_analyst" in full_text or "quiet analyst" in full_text:
-        return MOCK_PERSONA_DIALOGUE["quiet_analyst"]
+        return dialogues["quiet_analyst"]
 
     return MOCK_DEFAULT_REPLY
 
@@ -136,6 +159,14 @@ async def get_sarvam_completion(
             json=payload,
             timeout=15.0,
         )
+        if resp.status_code == 400 and "sarvam-105b" in resp.text:
+            payload["model"] = "sarvam-105b"
+            resp = await c.post(
+                settings.SARVAM_LLM_URL,
+                headers=headers,
+                json=payload,
+                timeout=15.0,
+            )
         resp.raise_for_status()
         data = resp.json()
         choices = data.get("choices", [])

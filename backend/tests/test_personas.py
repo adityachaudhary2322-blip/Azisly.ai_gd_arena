@@ -65,3 +65,23 @@ def test_active_panel_selection_n_panelists():
     panel_5 = get_active_panel(5)
     assert len(panel_5) == 5
     assert [p.avatar_id for p in panel_5] == ["moderator", "dominator", "data_driven", "bridger", "quiet_analyst"]
+
+
+def test_persona_language_prompt_formatting():
+    """Verify chat messages incorporate target Indic language instructions."""
+    messages_hi = MODERATOR.format_chat_messages(
+        topic="Fintech Disruption",
+        recent_transcripts=[{"speaker": "User", "text": "UPI growth has been exponential."}],
+        language="hi-IN",
+    )
+    system_msg = next(m["content"] for m in messages_hi if m["role"] == "system")
+    assert "Hindi or professional corporate Hinglish" in system_msg
+
+    messages_ta = DOMINATOR.format_chat_messages(
+        topic="Fintech Disruption",
+        recent_transcripts=[],
+        language="ta-IN",
+    )
+    system_msg_ta = next(m["content"] for m in messages_ta if m["role"] == "system")
+    assert "Tamil or professional Tanglish" in system_msg_ta
+
