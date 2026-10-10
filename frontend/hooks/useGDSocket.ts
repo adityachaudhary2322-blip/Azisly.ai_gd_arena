@@ -41,9 +41,15 @@ export const DEFAULT_GD_WS_URL =
 /**
  * Wire format for outgoing `audio_chunk.data`: base64 of raw PCM,
  * signed 16-bit little-endian, mono, 16 kHz, 100 ms per chunk.
+ *
+ * Chunks are sent only while the VAD hears the candidate speaking: the
+ * backend treats every chunk as speech (interrupts the AI, resets its
+ * end-of-turn pause timer), so streaming silence would stall the discussion.
  */
 const TARGET_SAMPLE_RATE = 16_000;
 const CHUNK_MS = 100;
+/** Audio kept from just before speech onset so the first syllable isn't clipped. */
+const PRE_ROLL_CHUNKS = 3;
 
 /** VAD tuning. Levels are RMS of float samples in [-1, 1]. */
 const VAD_FRAME_MS = 20;
@@ -229,6 +235,7 @@ class GDAudioEngine {
   // VAD
   private noiseFloor = 0.01;
   private speaking = false;
+  private preRoll: string[] = [];
   private aboveCount = 0;
   private belowCount = 0;
 
@@ -395,7 +402,14 @@ class GDAudioEngine {
     data: { type: "pcm"; buffer: ArrayBuffer } | { type: "level"; rms: number },
   ): void {
     if (data.type === "pcm") {
-      if (this.streaming) this.cb.onChunk(bytesToBase64(new Uint8Array(data.buffer)));
+      if (!this.streaming) return;
+      const chunk = bytesToBase64(new Uint8Array(data.buffer));
+      if (this.speaking) {
+        this.cb.onChunk(chunk);
+      } else {
+        this.preRoll.push(chunk);
+        if (this.preRoll.length > PRE_ROLL_CHUNKS) this.preRoll.shift();
+      }
     } else {
       this.runVad(data.rms);
     }
@@ -411,7 +425,10 @@ class GDAudioEngine {
       this.belowCount = 0;
       if (!this.speaking && ++this.aboveCount >= VAD_ONSET_FRAMES) {
         this.speaking = true;
+        // Interrupt first, then the buffered lead-in audio.
         this.cb.onSpeechStart(agentActive);
+        if (this.streaming) for (const chunk of this.preRoll) this.cb.onChunk(chunk);
+        this.preRoll = [];
       }
       return;
     }
@@ -431,6 +448,7 @@ class GDAudioEngine {
   /** Stop the microphone but keep the context alive (e.g. awaiting report). */
   stopCapture(): void {
     this.streaming = false;
+    this.preRoll = [];
     if (this.worklet) {
       this.worklet.port.onmessage = null;
       this.worklet.disconnect();

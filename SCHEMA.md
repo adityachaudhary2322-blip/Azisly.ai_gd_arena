@@ -5,6 +5,7 @@
   {"type": "start_session", "topic": "AI in Job Markets", "panel_size": 3, "language": "en-IN"}
 - Audio Stream Chunk:
   {"type": "audio_chunk", "data": "<base64_encoded_audio>"}
+  (16-bit PCM, 16 kHz mono, 100 ms per chunk. Sent only while the candidate is speaking, gated by client-side VAD with ~300 ms pre-roll; the server treats every chunk as speech.)
 - User Interrupted AI:
   {"type": "user_interrupted"}
 - End Session Early:
