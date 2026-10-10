@@ -35,6 +35,19 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+async def root():
+    """Root endpoint welcoming visitors and providing service status."""
+    return {
+        "status": "online",
+        "service": "gd-arena-backend",
+        "message": "GD Arena Backend Service is running.",
+        "health": "/health",
+        "docs": "/docs",
+        "websocket": "/ws/gd",
+    }
+
+
 @app.get("/health")
 async def health_check():
     """Lightweight health check endpoint for Render service monitors."""

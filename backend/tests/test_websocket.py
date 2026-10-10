@@ -6,6 +6,18 @@ from fastapi.testclient import TestClient
 from backend.main import app
 
 
+def test_root_endpoint():
+    """Verify root endpoint responds with 200 and valid status JSON."""
+    client = TestClient(app)
+    response = client.get("/")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "online"
+    assert data["service"] == "gd-arena-backend"
+    assert "health" in data
+    assert "websocket" in data
+
+
 def test_health_endpoint():
     """Verify health endpoint responds with 200 and valid JSON."""
     client = TestClient(app)

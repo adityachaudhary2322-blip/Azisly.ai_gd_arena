@@ -26,6 +26,10 @@ export function normalizeWsUrl(rawUrl: string): string {
   } else if (url.startsWith("http://")) {
     url = url.replace(/^http:\/\//i, "ws://");
   }
+  url = url.replace(/\/+$/, "");
+  if (!url.endsWith("/ws/gd")) {
+    url = `${url}/ws/gd`;
+  }
   return url;
 }
 
