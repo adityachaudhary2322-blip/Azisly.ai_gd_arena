@@ -8,7 +8,7 @@ export function EmptyState({ title, body }: { title: string; body: string }) {
       <p className="max-w-md text-muted">{body}</p>
       <Link
         href="/"
-        className="mt-2 inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground"
+        className="btn-primary mt-2"
       >
         <ArrowLeft aria-hidden className="size-4" />
         Go to lobby

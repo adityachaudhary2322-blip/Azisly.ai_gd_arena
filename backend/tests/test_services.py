@@ -228,3 +228,14 @@ async def test_sarvam_llm_api_success(monkeypatch):
     async with httpx.AsyncClient(transport=transport) as client:
         result = await get_sarvam_completion([{"role": "user", "content": "Hello"}], client=client)
         assert result == expected_output
+
+
+@pytest.mark.asyncio
+async def test_sarvam_llm_mock_stays_on_the_chosen_topic():
+    """Mock-mode lines are built around the session's topic, not a fixed AI-jobs script."""
+    from backend.engine.personas import DOMINATOR, MODERATOR
+
+    for persona, mode in ((DOMINATOR, "discuss"), (MODERATOR, "invite")):
+        messages = persona.format_chat_messages(topic="Mirrors", recent_transcripts=[], mode=mode)
+        reply = await get_sarvam_completion(messages)
+        assert "Mirrors" in reply

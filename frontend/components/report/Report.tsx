@@ -68,7 +68,7 @@ export function Report() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-5xl flex-1 space-y-8 px-4 py-8 sm:px-6 sm:py-12">
+    <main className="animate-fade-up mx-auto w-full max-w-5xl flex-1 space-y-8 pb-[calc(2rem+env(safe-area-inset-bottom))] px-4 py-8 sm:px-6 sm:py-12">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-2">
           <Link href="/" className="inline-flex items-center gap-1 text-sm text-muted hover:text-foreground">
@@ -87,14 +87,14 @@ export function Report() {
           <button
             type="button"
             onClick={retry}
-            className="inline-flex items-center gap-2 rounded-xl border border-border-strong px-4 py-2.5 text-sm font-semibold text-foreground hover:border-primary"
+            className="btn-quiet text-sm"
           >
             <RotateCcw aria-hidden className="size-4" />
             Retry topic
           </button>
           <Link
             href="/"
-            className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground hover:bg-accent-strong"
+            className="btn-primary text-sm"
           >
             New discussion
           </Link>
@@ -148,7 +148,7 @@ export function Report() {
       {/* Speaker balance */}
       <section
         aria-labelledby="balance-h"
-        className="space-y-5 rounded-xl border border-border bg-surface p-5 sm:p-6"
+        className="space-y-5 glass-card p-5 sm:p-6"
       >
         <div className="space-y-1">
           <h2 id="balance-h" className="text-lg font-semibold">
@@ -199,7 +199,7 @@ export function Report() {
             {feedback.map((item, i) => (
               <li
                 key={i}
-                className="flex flex-col gap-4 rounded-xl border border-border bg-surface p-5"
+                className="flex flex-col gap-4 glass-card p-5"
               >
                 <h3 className="text-sm font-semibold uppercase tracking-wider text-primary">
                   {item.criterion}
@@ -217,7 +217,7 @@ export function Report() {
       </section>
 
       {transcript.length > 0 && (
-        <details className="rounded-xl border border-border bg-surface p-5">
+        <details className="glass-card p-5">
           <summary className="cursor-pointer font-semibold">
             Full transcript <span className="text-sm font-normal text-subtle">({transcript.length} lines)</span>
           </summary>
@@ -388,7 +388,7 @@ function StatTile({
   hint: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-border bg-surface p-5">
+    <div className="flex flex-col gap-2 glass-card p-5">
       <div className="flex items-center gap-2 text-sm text-muted">
         {icon}
         {label}

@@ -85,3 +85,14 @@ def test_persona_language_prompt_formatting():
     system_msg_ta = next(m["content"] for m in messages_ta if m["role"] == "system")
     assert "Tamil or professional Tanglish" in system_msg_ta
 
+
+
+def test_every_prompt_pins_the_topic():
+    """Bots are told, in every mode, to stay strictly relevant to the topic."""
+    for mode in ("discuss", "invite", "react", "custom"):
+        messages = DATA_DRIVEN.format_chat_messages(
+            topic="Mirrors", recent_transcripts=[], mode=mode, instruction="Say something."
+        )
+        system_msg = messages[0]["content"]
+        assert 'topic is "Mirrors"' in system_msg
+        assert "directly relevant" in system_msg

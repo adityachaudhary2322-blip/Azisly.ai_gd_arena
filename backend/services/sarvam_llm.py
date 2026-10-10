@@ -187,6 +187,49 @@ def _history_length(user_text: str) -> int:
     return sum(1 for line in block.splitlines() if ":" in line)
 
 
+# Topic-templated mock lines, so mock-mode discussions stay on whatever topic was chosen.
+MOCK_TOPIC_DIALOGUE_EN: Dict[str, List[str]] = {
+    "moderator": [
+        "Let's look at {topic} from two sides: who benefits, and who bears the cost.",
+        "We have different views on {topic}; let's pin down exactly where we disagree.",
+    ],
+    "dominator": [
+        "I'll be direct: on {topic}, the popular view is too comfortable and ignores the hard realities.",
+        "Honestly, when it comes to {topic}, waiting and watching is the worst option we have.",
+    ],
+    "data_driven": [
+        "If we look at the evidence on {topic}, the picture is more mixed than either side admits.",
+        "On {topic}, the measurable outcomes matter more than opinions, and they point both ways.",
+    ],
+    "bridger": [
+        "I think both views on {topic} share a common goal, and that's where we can build.",
+        "There's a middle ground on {topic} if we combine the urgency with the evidence.",
+    ],
+    "quiet_analyst": [
+        "The deeper question about {topic} is what it changes over the next ten years.",
+        "Beyond the immediate debate, {topic} has second-order effects we haven't discussed.",
+    ],
+}
+MOCK_TOPIC_DIALOGUE_HI: Dict[str, List[str]] = {
+    "moderator": ["Chaliye {topic} ko dono pehluon se dekhte hain: kise fayda hai aur kise nuksaan."],
+    "dominator": ["Seedhi baat, {topic} par aam raay bahut aaram-pasand hai aur zameeni sach ko nazarandaz karti hai."],
+    "data_driven": ["{topic} ke saboot dekhein toh tasveer dono taraf ki raay se zyada mili-juli hai."],
+    "bridger": ["Mujhe lagta hai {topic} par dono vichaaron ka lakshya ek hi hai, wahin se aage badh sakte hain."],
+    "quiet_analyst": ["{topic} ka gehra sawaal yeh hai ki agle das saal mein yeh kya badlega."],
+}
+MOCK_TOPIC_INVITE_EN = "What's your own view on {topic}, and why?"
+MOCK_TOPIC_INVITE_HI = "{topic} par aapki apni raay kya hai, aur kyon?"
+MOCK_TOPIC_REACT_EN = "That's a fair point on {topic}, and it changes how we should weigh the trade-offs."
+MOCK_TOPIC_REACT_HI = "{topic} par yeh accha point hai, isse trade-offs ko dekhne ka nazariya badalta hai."
+
+
+def _prompt_topic(user_text: str) -> Optional[str]:
+    marker = 'gd topic: "'
+    if marker not in user_text:
+        return None
+    return user_text.split(marker, 1)[1].split('"', 1)[0].strip() or None
+
+
 def _detect_mock_response(messages: List[Dict[str, str]]) -> str:
     """Select appropriate deterministic mock text based on message contents and target language."""
     full_text = " ".join(m.get("content", "") for m in messages).lower()
@@ -208,10 +251,22 @@ def _detect_mock_response(messages: List[Dict[str, str]]) -> str:
     if persona is None:
         return MOCK_DEFAULT_REPLY
 
+    # Keep the original casing of the topic for the spoken line.
+    raw_user = " ".join(m.get("content", "") for m in messages if m.get("role") != "system")
+    topic = _prompt_topic(raw_user.lower()) and raw_user.split('GD Topic: "', 1)[-1].split('"', 1)[0]
+
     if "ask the candidate" in user_text:
+        if topic:
+            return (MOCK_TOPIC_INVITE_HI if is_hindi else MOCK_TOPIC_INVITE_EN).format(topic=topic)
         return (MOCK_INVITE_HI if is_hindi else MOCK_INVITE_EN)[persona]
     if "the candidate just spoke" in user_text:
+        if topic:
+            return (MOCK_TOPIC_REACT_HI if is_hindi else MOCK_TOPIC_REACT_EN).format(topic=topic)
         return (MOCK_REACT_HI if is_hindi else MOCK_REACT_EN)[persona]
+
+    if topic:
+        bank = (MOCK_TOPIC_DIALOGUE_HI if is_hindi else MOCK_TOPIC_DIALOGUE_EN)[persona]
+        return bank[_history_length(user_text) % len(bank)].format(topic=topic)
 
     bank = [dialogues[persona], *extras.get(persona, [])]
     return bank[_history_length(user_text) % len(bank)]

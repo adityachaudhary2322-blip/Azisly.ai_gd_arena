@@ -41,7 +41,7 @@ export function TranscriptDrawer({ id, open, onClose, entries, seats }: Transcri
       <aside
         id={id}
         aria-label="Live transcript"
-        className={`fixed inset-x-0 bottom-0 z-30 flex h-[70dvh] flex-col rounded-t-2xl border-t border-border bg-surface transition-transform duration-200 lg:static lg:z-auto lg:h-auto lg:w-96 lg:translate-y-0 lg:rounded-none lg:border-t-0 lg:border-l ${
+        className={`float-pane fixed inset-x-0 bottom-0 z-30 flex h-[70dvh] flex-col rounded-t-3xl border-t pb-[env(safe-area-inset-bottom)] transition-transform duration-200 lg:static lg:z-auto lg:h-auto lg:w-96 lg:translate-y-0 lg:rounded-none lg:border-t-0 lg:border-l ${
           open ? "translate-y-0" : "translate-y-full max-lg:invisible"
         }`}
       >

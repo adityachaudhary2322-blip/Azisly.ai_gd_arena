@@ -11,6 +11,8 @@ import {
   ABSTRACT_TOPICS,
   DEFAULT_DURATION,
   DURATIONS,
+  MAX_MINUTES,
+  MIN_MINUTES,
   LANGUAGES,
   PLACEMENT_TOPICS,
   type TopicCategory,
@@ -34,7 +36,12 @@ export function Lobby() {
   const [custom, setCustom] = useState("");
   const [panelSize, setPanelSize] = useState(3);
   const [language, setLanguage] = useState<string>(LANGUAGES[0].value);
-  const [minutes, setMinutes] = useState<number>(DEFAULT_DURATION);
+  const [minutes, setMinutesValue] = useState<number>(DEFAULT_DURATION);
+  const [minutesText, setMinutesText] = useState(String(DEFAULT_DURATION));
+  const setMinutes = (m: number) => {
+    setMinutesValue(m);
+    setMinutesText(String(m));
+  };
   const [field, setField] = useState("");
   const [interests, setInterests] = useState("");
 
@@ -69,8 +76,8 @@ export function Lobby() {
   const topics = category === "abstract" ? ABSTRACT_TOPICS : PLACEMENT_TOPICS;
 
   return (
-    <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10 sm:px-6 sm:py-16">
-      <header className="mb-10 space-y-4">
+    <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-8 pb-36 sm:px-6 sm:pt-14 lg:pb-16">
+      <header className="animate-fade-up mb-10 space-y-4">
         <div className="flex items-center gap-2 text-primary">
           <AudioLines aria-hidden className="size-6" />
           <span className="font-mono text-sm uppercase tracking-widest">GD Arena</span>
@@ -84,9 +91,9 @@ export function Lobby() {
         </p>
       </header>
 
-      <form onSubmit={handleSubmit} className="grid gap-8 lg:grid-cols-[1fr_20rem]">
+      <form onSubmit={handleSubmit} className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_22rem]">
         {/* Topic */}
-        <fieldset className="min-w-0 space-y-5 rounded-xl border border-border bg-surface p-5 sm:p-6">
+        <fieldset className="min-w-0 space-y-5 glass-card p-5 sm:p-6">
           <legend className="sr-only">Topic</legend>
           <h2 className="text-lg font-semibold" aria-hidden>
             1. Choose a topic
@@ -101,7 +108,7 @@ export function Lobby() {
                   type="button"
                   aria-pressed={selected}
                   onClick={() => chooseCategory(id)}
-                  className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-colors ${
+                  className={`inline-flex min-h-10 items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-colors ${
                     selected
                       ? "border-primary bg-primary text-primary-foreground"
                       : "border-border-strong text-muted hover:border-primary hover:text-foreground"
@@ -126,7 +133,7 @@ export function Lobby() {
                 maxLength={CUSTOM_MAX}
                 placeholder="e.g. Should coding be taught in primary school?"
                 autoFocus
-                className="w-full rounded-lg border border-border-strong bg-background px-4 py-3 text-foreground placeholder:text-subtle focus:border-primary"
+                className="w-full rounded-2xl border border-border bg-background/60 px-4 py-3 text-foreground placeholder:text-subtle focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/15"
               />
               <p className="text-right text-xs text-subtle" aria-live="polite">
                 {custom.length}/{CUSTOM_MAX}
@@ -141,7 +148,7 @@ export function Lobby() {
               {topics.map((t) => (
                 <label
                   key={t}
-                  className="flex cursor-pointer items-center gap-3 rounded-lg border border-border px-4 py-3 text-muted transition-colors hover:border-border-strong has-checked:border-primary has-checked:bg-primary/10 has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring"
+                  className="flex cursor-pointer items-center gap-3 min-h-12 rounded-2xl border border-border bg-background/30 px-4 py-3 text-muted transition-colors hover:border-border-strong has-checked:border-primary has-checked:bg-primary/10 has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring"
                 >
                   <input
                     type="radio"
@@ -160,7 +167,7 @@ export function Lobby() {
 
         {/* Panel + start */}
         <div className="space-y-6">
-          <fieldset className="space-y-5 rounded-xl border border-border bg-surface p-5 sm:p-6">
+          <fieldset className="space-y-5 glass-card p-5 sm:p-6">
             <legend className="sr-only">Panel</legend>
             <h2 className="text-lg font-semibold" aria-hidden>
               2. Panel
@@ -216,18 +223,41 @@ export function Lobby() {
               <label htmlFor={`${ids}-time`} className="block text-sm font-medium text-muted">
                 Discussion length
               </label>
-              <select
-                id={`${ids}-time`}
-                value={minutes}
-                onChange={(e) => setMinutes(Number(e.target.value))}
-                className="w-full rounded-lg border border-border-strong bg-background px-3 py-2.5 text-foreground"
-              >
+              <div role="group" aria-label="Preset lengths" className="flex flex-wrap gap-2">
                 {DURATIONS.map((m) => (
-                  <option key={m} value={m}>
-                    {m} minutes
-                  </option>
+                  <button
+                    key={m}
+                    type="button"
+                    aria-pressed={minutes === m}
+                    onClick={() => setMinutes(m)}
+                    className={`min-h-10 min-w-12 rounded-full border px-3 text-sm font-semibold transition-colors ${
+                      minutes === m
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border-strong text-muted hover:border-primary hover:text-foreground"
+                    }`}
+                  >
+                    {m} min
+                  </button>
                 ))}
-              </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  id={`${ids}-time`}
+                  type="number"
+                  inputMode="numeric"
+                  min={MIN_MINUTES}
+                  max={MAX_MINUTES}
+                  value={minutesText}
+                  onChange={(e) => {
+                    setMinutesText(e.target.value);
+                    const n = Math.round(Number(e.target.value));
+                    if (n >= MIN_MINUTES && n <= MAX_MINUTES) setMinutes(n);
+                  }}
+                  onBlur={() => setMinutesText(String(minutes))}
+                  className="w-24 rounded-2xl border border-border bg-background/60 px-4 py-2.5 text-foreground focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/15"
+                />
+                <span className="text-sm text-muted">minutes (custom, 1 to 60)</span>
+              </div>
               <p className="text-xs text-subtle">
                 When time is up the moderator cuts in and sums up the discussion.
               </p>
@@ -241,7 +271,7 @@ export function Lobby() {
                 id={`${ids}-lang`}
                 value={language}
                 onChange={(e) => setLanguage(e.target.value)}
-                className="w-full rounded-lg border border-border-strong bg-background px-3 py-2.5 text-foreground"
+                className="w-full rounded-2xl border border-border bg-background/60 px-4 py-3 text-foreground placeholder:text-subtle focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/15"
               >
                 {LANGUAGES.map((l) => (
                   <option key={l.value} value={l.value}>
@@ -252,7 +282,7 @@ export function Lobby() {
             </div>
           </fieldset>
 
-          <fieldset className="space-y-4 rounded-xl border border-border bg-surface p-5 sm:p-6">
+          <fieldset className="space-y-4 glass-card p-5 sm:p-6">
             <legend className="sr-only">About you</legend>
             <div>
               <h2 className="text-lg font-semibold" aria-hidden>
@@ -270,7 +300,7 @@ export function Lobby() {
                 onChange={(e) => setField(e.target.value)}
                 maxLength={80}
                 placeholder="e.g. Backend engineering"
-                className="w-full rounded-lg border border-border-strong bg-background px-3 py-2.5 text-foreground placeholder:text-subtle focus:border-primary"
+                className="w-full rounded-2xl border border-border bg-background/60 px-4 py-3 text-foreground placeholder:text-subtle focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/15"
               />
             </div>
             <div className="space-y-2">
@@ -283,19 +313,18 @@ export function Lobby() {
                 onChange={(e) => setInterests(e.target.value)}
                 maxLength={200}
                 placeholder="e.g. Kafka, system design, fintech"
-                className="w-full rounded-lg border border-border-strong bg-background px-3 py-2.5 text-foreground placeholder:text-subtle focus:border-primary"
+                className="w-full rounded-2xl border border-border bg-background/60 px-4 py-3 text-foreground placeholder:text-subtle focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/15"
               />
             </div>
           </fieldset>
 
-          <button
-            type="submit"
-            disabled={!topic}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 py-4 text-lg font-semibold text-accent-foreground transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:bg-surface-raised disabled:text-subtle"
-          >
-            Enter the arena
-            <ArrowRight aria-hidden className="size-5" />
-          </button>
+          {/* Pinned to the bottom of the screen on phones, inline on desktop. */}
+          <div className="max-lg:float-pane max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-30 max-lg:border-t max-lg:px-4 max-lg:pt-3 max-lg:pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+            <button type="submit" disabled={!topic} className="btn-primary w-full py-4 text-lg">
+              Enter the arena
+              <ArrowRight aria-hidden className="size-5" />
+            </button>
+          </div>
           <p className="flex items-start gap-2 text-sm text-subtle">
             <Mic aria-hidden className="mt-0.5 size-4 shrink-0" />
             Your browser will ask for microphone access. The panel will turn to you with a

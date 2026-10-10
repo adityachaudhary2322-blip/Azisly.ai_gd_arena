@@ -42,6 +42,13 @@ LANGUAGE_PROMPTS: Dict[str, str] = {
 }
 
 
+TOPIC_RULE = (
+    "The group discussion topic is \"{topic}\". Everything you say must be directly relevant to this "
+    "topic: never bring up unrelated subjects, examples, or statistics. If the topic is abstract, "
+    "interpret it thoughtfully, but tie every point back to it. If the last speaker drifted off-topic, "
+    "steer the discussion back."
+)
+
 CONVERSATION_STYLE = (
     "Speak the way people really talk in a live group discussion: plain spoken words, contractions, "
     "no lists or headings, no filler openers like 'Great point' or 'Absolutely'. Vary how you start "
@@ -83,7 +90,8 @@ class Persona:
         history_str = "\n".join(history_lines) if history_lines else "(Discussion just commenced)"
 
         lang_instruction = LANGUAGE_PROMPTS.get(language, LANGUAGE_PROMPTS["en-IN"])
-        system_content = f"{self.system_prompt}\n\n{CONVERSATION_STYLE}\n\n{lang_instruction}"
+        topic_rule = TOPIC_RULE.format(topic=topic)
+        system_content = f"{self.system_prompt}\n\n{topic_rule}\n\n{CONVERSATION_STYLE}\n\n{lang_instruction}"
 
         if mode == "custom":
             task = f"Respond as {self.name}. {instruction}"
@@ -149,7 +157,7 @@ DOMINATOR = Persona(
     turn_weight=0.30,
     system_prompt=(
         "You are Kabir, an aggressive challenger in an Indian campus placement Group Discussion. "
-        "You are determined to command the floor, dispute weak premises, and assert real-world market friction. "
+        "You are determined to command the floor, dispute weak premises, and stress real-world consequences. "
         "Your tone is high-energy, direct, and urgent. "
         "Speak in 1-2 punchy, spoken sentences (under 30 words). Never use markdown or speaker prefixes."
     ),
@@ -163,8 +171,8 @@ DATA_DRIVEN = Persona(
     turn_weight=0.25,
     system_prompt=(
         "You are Anushka, the Data-Driven participant in an Indian campus placement Group Discussion. "
-        "You back your points with statistics, market benchmarks (NASSCOM, RBI, Gartner), and quantitative trade-offs. "
-        "You politely debunk subjective opinions with empirical figures. "
+        "You back your points with evidence, numbers, and concrete trade-offs that bear directly on the topic. "
+        "You politely question subjective opinions, and never cite figures unrelated to the topic. "
         "Speak in 1-2 sharp, spoken sentences (under 30 words). Never use markdown or speaker prefixes."
     ),
 )

@@ -23,8 +23,10 @@ export const ABSTRACT_TOPICS = [
 ] as const;
 
 /** Discussion length choices, in minutes. */
-export const DURATIONS = [3, 5, 7, 10, 15, 20] as const;
+export const DURATIONS = [1, 3, 5, 7, 10, 15] as const;
 export const DEFAULT_DURATION = 7;
+export const MIN_MINUTES = 1;
+export const MAX_MINUTES = 60;
 
 export const LANGUAGES = [
   { value: "en-IN", label: "English" },

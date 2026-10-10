@@ -193,7 +193,7 @@ export function Arena() {
         </main>
 
         {/* Controls */}
-        <footer className="flex items-center justify-center gap-2 border-t border-border px-4 py-4">
+        <footer className="float-pane flex items-center justify-center gap-2 border-t px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
           <span
             role="status"
             className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm whitespace-nowrap ${
@@ -227,7 +227,7 @@ export function Arena() {
               type="button"
               onClick={handleEnd}
               disabled={ending}
-              className="inline-flex items-center gap-2 rounded-full bg-danger px-5 py-2 whitespace-nowrap text-sm font-semibold text-background hover:bg-danger/90 disabled:opacity-60"
+              className="inline-flex min-h-11 items-center gap-2 rounded-full bg-danger px-5 py-2 whitespace-nowrap text-sm font-semibold text-background hover:bg-danger/90 disabled:opacity-60"
             >
               <PhoneOff aria-hidden className="size-4" />
               End discussion
@@ -235,7 +235,7 @@ export function Arena() {
           ) : (
             <Link
               href="/"
-              className="inline-flex items-center gap-2 rounded-full bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground"
+              className="btn-primary text-sm"
             >
               New discussion
             </Link>
