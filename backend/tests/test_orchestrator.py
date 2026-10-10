@@ -106,3 +106,23 @@ async def test_orchestrator_end_session_produces_final_report():
     report = final_reports[0]
     assert "metrics" in report
     assert "feedback" in report
+    assert "speaking_time_distribution" in report["metrics"]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_panel_size_5():
+    """Verify panel_size=5 activates all 5 panelists."""
+    messages = []
+
+    async def mock_send(msg: dict):
+        messages.append(msg)
+
+    orchestrator = GDOrchestrator(send_callback=mock_send)
+    await orchestrator.start_session(topic="Future of AI in India", panel_size=5)
+
+    assert len(orchestrator.panel) == 5
+    names = [p.name for p in orchestrator.panel]
+    assert names == ["Arjun", "Kabir", "Anushka", "Priya", "Rohan"]
+
+    await orchestrator.end_session()
+

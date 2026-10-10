@@ -1,57 +1,58 @@
 """Post-GD session evaluation engine for GD Arena.
 
-Parses complete session transcripts and calculates:
-- Speaking time percentage (User vs Panel)
-- Interruptions handled
-- Initiative score (1 - 10)
-- Qualitative criterion-based feedback citing exact verbatim quotes.
-Strictly adheres to SCHEMA.md contract.
+100% Sarvam AI powered:
+- Parses full session transcript.
+- Computes speaking time percentage, speaking time distribution, interruptions handled, and initiative score.
+- Calls Sarvam Chat LLM (via sarvam_llm.py) to generate qualitative feedback citing exact verbatim quotes.
+- Conforms strictly to the SCHEMA.md final_report contract.
 """
 
+import json
 import logging
-import math
 import re
 from typing import Any, Dict, List, Optional
 import httpx
 
 from backend.config import settings
+from backend.services.sarvam_llm import get_sarvam_completion
 
 logger = logging.getLogger(__name__)
 
 
-def calculate_speaking_metrics(
+def calculate_transcript_metrics(
     transcripts: List[Dict[str, Any]],
     interruptions_count: int,
-) -> Dict[str, int]:
-    """Calculate numerical metrics from the session transcript."""
-    user_words = 0
+) -> Dict[str, Any]:
+    """Calculate numerical metrics and speaking time distribution across all participants."""
+    speaker_words: Dict[str, int] = {}
     total_words = 0
     user_turns = 0
-    total_turns = len(transcripts)
     user_spoke_early = False
 
     for idx, entry in enumerate(transcripts):
-        speaker = entry.get("speaker", "")
-        text = entry.get("text", "")
+        speaker = entry.get("speaker", "Participant").strip()
+        text = entry.get("text", "").strip()
         words = len(re.findall(r"\w+", text))
         total_words += words
 
+        speaker_words[speaker] = speaker_words.get(speaker, 0) + words
+
         if speaker.lower() in ("user", "candidate"):
-            user_words += words
             user_turns += 1
             if idx <= 2:
                 user_spoke_early = True
 
-    # Speaking time % based on relative word volume
+    # Compute speaking time distribution in percentages
+    speaking_time_distribution: Dict[str, int] = {}
     if total_words > 0:
-        speaking_time_user_percent = int(round((user_words / total_words) * 100))
+        for spk, count in speaker_words.items():
+            speaking_time_distribution[spk] = int(round((count / total_words) * 100))
     else:
-        speaking_time_user_percent = 0
+        speaking_time_distribution["User"] = 0
 
-    # Initiative score out of 10 based on standard Indian GD assessment criteria:
-    # - Early entry / Icebreaking
-    # - Sustained contributions (turns)
-    # - Assertiveness / Interruptions handled
+    user_percent = speaking_time_distribution.get("User", 0)
+
+    # Calculate initiative score (1 - 10) based on Indian placement GD criteria
     base_score = 5
     if user_spoke_early:
         base_score += 2
@@ -66,17 +67,18 @@ def calculate_speaking_metrics(
     initiative_score = min(10, max(1, base_score))
 
     return {
-        "speaking_time_user_percent": speaking_time_user_percent,
+        "speaking_time_user_percent": user_percent,
         "interruptions_handled": interruptions_count,
         "initiative_score": initiative_score,
+        "speaking_time_distribution": speaking_time_distribution,
     }
 
 
-def generate_heuristic_feedback(
+def extract_deterministic_feedback(
     transcripts: List[Dict[str, Any]],
-    metrics: Dict[str, int],
+    metrics: Dict[str, Any],
 ) -> List[Dict[str, str]]:
-    """Generate structured qualitative feedback with verbatim quote citations."""
+    """Extract qualitative feedback citing exact verbatim quotes from the candidate's speech."""
     user_entries = [
         e for e in transcripts
         if e.get("speaker", "").lower() in ("user", "candidate") and e.get("text")
@@ -85,33 +87,29 @@ def generate_heuristic_feedback(
     feedback: List[Dict[str, str]] = []
 
     if user_entries:
-        # 1. Idea Building & Synthesis
-        first_user_text = user_entries[0]["text"]
-        # Extract a crisp verbatim snippet (up to 60 characters or full sentence)
-        snippet = first_user_text.strip()
-        if len(snippet) > 80:
-            snippet = snippet[:77].rsplit(" ", 1)[0] + "..."
+        # First turn: Idea building & framing
+        first_quote = user_entries[0]["text"].strip()
+        if len(first_quote) > 75:
+            first_quote = first_quote[:72].rsplit(" ", 1)[0] + "..."
 
         feedback.append({
             "criterion": "Idea Building",
-            "quote": snippet,
+            "quote": first_quote,
             "analysis": (
                 "Constructive initiative shown; grounded the topic with forward-looking perspective "
                 "allowing peers to build on the framework."
             ),
         })
 
-        # 2. Collaborative Phrasing / Group Dynamics
+        # Subsequent turn: Collaborative bridging or sustaining argument
         if len(user_entries) > 1:
-            second_text = user_entries[1]["text"].strip()
-            if len(second_text) > 80:
-                second_snippet = second_text[:77].rsplit(" ", 1)[0] + "..."
-            else:
-                second_snippet = second_text
+            second_quote = user_entries[1]["text"].strip()
+            if len(second_quote) > 75:
+                second_quote = second_quote[:72].rsplit(" ", 1)[0] + "..."
 
             feedback.append({
                 "criterion": "Collaboration & Bridging",
-                "quote": second_snippet,
+                "quote": second_quote,
                 "analysis": (
                     "Active participation maintained momentum in the discussion; "
                     "bridged conversational flow and handled panel dynamics effectively."
@@ -120,14 +118,13 @@ def generate_heuristic_feedback(
         else:
             feedback.append({
                 "criterion": "Sustained Participation",
-                "quote": snippet,
+                "quote": first_quote,
                 "analysis": (
-                    "Strong opening contribution, but would benefit from intervening at least 2-3 times "
+                    "Solid opening contribution, but would benefit from intervening at least 2-3 times "
                     "across the mid and closing phases of the GD to anchor the final consensus."
                 ),
             })
     else:
-        # User didn't speak during the session
         feedback.append({
             "criterion": "Initiative & Voice Presence",
             "quote": "N/A (No speech recorded from user)",
@@ -137,7 +134,6 @@ def generate_heuristic_feedback(
             ),
         })
 
-    # 3. Interruption Handling
     if metrics["interruptions_handled"] > 0:
         feedback.append({
             "criterion": "Composure Under Pressure",
@@ -158,25 +154,57 @@ async def evaluate_session(
 ) -> Dict[str, Any]:
     """Parse session transcripts and produce the final evaluation report matching SCHEMA.md.
 
-    Returns:
-        {
-            "type": "final_report",
-            "metrics": {
-                "speaking_time_user_percent": int,
-                "interruptions_handled": int,
-                "initiative_score": int
-            },
-            "feedback": [
-                {
-                    "criterion": str,
-                    "quote": str,
-                    "analysis": str
-                }
-            ]
-        }
+    Uses Sarvam Chat LLM (sarvam-2b) to analyze performance with verbatim quotes,
+    with deterministic fallback for mock mode.
     """
-    metrics = calculate_speaking_metrics(transcripts, interruptions_count)
-    feedback = generate_heuristic_feedback(transcripts, metrics)
+    metrics = calculate_transcript_metrics(transcripts, interruptions_count)
+
+    # In mock mode or missing API key, directly extract verbatim quotes from transcripts
+    if settings.MOCK_VOICE or not settings.SARVAM_API_KEY.strip():
+        feedback = extract_deterministic_feedback(transcripts, metrics)
+        return {
+            "type": "final_report",
+            "metrics": metrics,
+            "feedback": feedback,
+        }
+
+    # Attempt evaluation via live Sarvam LLM
+    try:
+        formatted_history = "\n".join(
+            f"{t.get('speaker', 'Participant')}: {t.get('text', '')}"
+            for t in transcripts
+        )
+        prompt_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert Indian campus placement Group Discussion evaluator. "
+                    "Evaluate the candidate ('User') strictly citing verbatim quotes from their speech. "
+                    "Return ONLY valid JSON format: "
+                    '{"feedback": [{"criterion": "string", "quote": "verbatim user quote", "analysis": "string"}]}'
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Transcript:\n{formatted_history}\n\nMetrics:\n{json.dumps(metrics)}",
+            },
+        ]
+
+        raw_completion = await get_sarvam_completion(
+            messages=prompt_messages,
+            temperature=0.1,
+            max_tokens=300,
+            client=client,
+        )
+
+        parsed = json.loads(raw_completion)
+        if isinstance(parsed, dict) and "feedback" in parsed and isinstance(parsed["feedback"], list):
+            feedback = parsed["feedback"]
+        else:
+            feedback = extract_deterministic_feedback(transcripts, metrics)
+    except Exception as exc:
+        logger.debug("Evaluation fallback used: %s", exc)
+        feedback = extract_deterministic_feedback(transcripts, metrics)
 
     return {
         "type": "final_report",

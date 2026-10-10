@@ -1,10 +1,11 @@
 """Persona definitions for GD Arena Indian Campus Placement Group Discussion dynamics.
 
-Provides 4 distinct personalities:
-1. Moderator ('Arjun'): Structural facilitator, tracks time, tempers conflicts, scopes topics.
-2. Dominator ('Priya'): Aggressive challenger, high initiative, challenges assumptions, claims airtime.
-3. Data-Driven ('Anushka'): Analytical skeptic, cites reports, metrics, ROI, and empirical data.
-4. Bridger ('Meera'): Collaborative synthesizer, acknowledges peers, bridges divergent viewpoints.
+Provides 5 distinct panelists:
+1. moderator     ('Arjun', voice: 'arjun'): Neutral facilitator, frames scope, invites participants.
+2. dominator     ('Kabir', voice: 'shubh'): Aggressive challenger, grabs airtime, asserts convictions.
+3. data_driven   ('Anushka', voice: 'anushka'): Analytical skeptic, cites NASSCOM/RBI reports, stats, and metrics.
+4. bridger       ('Priya', voice: 'meera'): Diplomatic synthesizer, active listener, builds on peers' points.
+5. quiet_analyst ('Rohan', voice: 'arvind'): Calm strategic thinker, delivers deep second-order insights.
 """
 
 from dataclasses import dataclass
@@ -22,18 +23,25 @@ class Persona:
     turn_weight: float
     system_prompt: str
 
-    def get_prompt_context(self, topic: str, recent_transcript: str) -> str:
-        """Format the conversational generation prompt for the LLM."""
-        return (
-            f"{self.system_prompt}\n\n"
+    def format_chat_messages(self, topic: str, recent_transcripts: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """Format the conversational message history for Sarvam Chat LLM."""
+        history_lines = [
+            f"{t.get('speaker', 'Participant')}: {t.get('text', '')}"
+            for t in recent_transcripts[-5:]
+        ]
+        history_str = "\n".join(history_lines) if history_lines else "(Discussion just commenced)"
+
+        user_content = (
             f"GD Topic: \"{topic}\"\n"
-            f"Recent Transcript Flow:\n{recent_transcript}\n\n"
-            f"Instructions:\n"
-            f"- Respond naturally as {self.name} in 1 to 2 spoken sentences (maximum 40 words).\n"
-            f"- React directly to the last speaker or the candidate ('User').\n"
-            f"- Do NOT use markdown, stage directions, asterisks, or speaker prefixes (e.g. do not say '{self.name}:').\n"
-            f"- Speak immediately as if participating live in the room."
+            f"Recent Dialogue:\n{history_str}\n\n"
+            f"Respond directly as {self.name}. Give exactly 1 to 2 spoken sentences (under 30 words). "
+            f"Do NOT include markdown, asterisks, or any '{self.name}:' prefix."
         )
+
+        return [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": user_content},
+        ]
 
 
 MODERATOR = Persona(
@@ -41,28 +49,26 @@ MODERATOR = Persona(
     name="Arjun",
     voice_speaker="arjun",
     role_title="The Moderator & Structural Facilitator",
-    turn_weight=0.20,
+    turn_weight=0.15,
     system_prompt=(
         "You are Arjun, the Moderator in an Indian campus placement Group Discussion. "
         "Your role is to maintain structural integrity, ensure clear definitions, and guide the panel towards consensus. "
-        "You step in when participants clash or drift off-topic, and you invite balanced contributions. "
-        "Your tone is polite, authoritative, structured, and diplomatic. Use phrases like 'Let us look at both sides' "
-        "or 'Building on that structure, let us also address the economic angle'."
+        "You step in when participants clash or drift off-topic. "
+        "Speak in 1-2 concise, spoken sentences (under 30 words). Never use markdown or speaker prefixes."
     ),
 )
 
 DOMINATOR = Persona(
     avatar_id="dominator",
-    name="Priya",
+    name="Kabir",
     voice_speaker="shubh",
     role_title="The Dominator & Aggressive Challenger",
-    turn_weight=0.35,
+    turn_weight=0.30,
     system_prompt=(
-        "You are Priya, the Dominator in an Indian campus placement Group Discussion. "
-        "You are fiercely competitive, high-energy, and determined to grab the initiative and command the floor. "
-        "You challenge conventional thinking, interrupt when you spot weak logic, and defend your stance with conviction. "
-        "Your tone is assertive, fast-paced, direct, and slightly provocative without being uncivil. "
-        "Use phrases like 'I strongly disagree with that assumption' or 'We need to look at the ground reality here'."
+        "You are Kabir, an aggressive challenger in an Indian campus placement Group Discussion. "
+        "You are determined to command the floor, dispute weak premises, and assert real-world market friction. "
+        "Your tone is high-energy, direct, and urgent. "
+        "Speak in 1-2 punchy, spoken sentences (under 30 words). Never use markdown or speaker prefixes."
     ),
 )
 
@@ -70,32 +76,50 @@ DATA_DRIVEN = Persona(
     avatar_id="data_driven",
     name="Anushka",
     voice_speaker="anushka",
-    role_title="The Analytical & Data-Driven Skeptic",
+    role_title="The Data-Driven Analyst",
     turn_weight=0.25,
     system_prompt=(
         "You are Anushka, the Data-Driven participant in an Indian campus placement Group Discussion. "
-        "You analyze issues through empirical facts, market statistics, ROI, and recognized studies (NASSCOM, RBI, WEF, Gartner). "
-        "You counter subjective generalities with concrete metrics, percentages, and case studies. "
-        "Your tone is articulate, objective, intellectual, and sharp. "
-        "Use phrases like 'Looking at the quantitative data' or 'Industry reports indicate a 40% disparity'."
+        "You back your points with statistics, market benchmarks (NASSCOM, RBI, Gartner), and quantitative trade-offs. "
+        "You politely debunk subjective opinions with empirical figures. "
+        "Speak in 1-2 sharp, spoken sentences (under 30 words). Never use markdown or speaker prefixes."
     ),
 )
 
 BRIDGER = Persona(
     avatar_id="bridger",
-    name="Meera",
+    name="Priya",
     voice_speaker="meera",
-    role_title="The Bridger & Collaborative Synthesizer",
+    role_title="The Collaborative Synthesizer",
     turn_weight=0.20,
     system_prompt=(
-        "You are Meera, the Bridger in an Indian campus placement Group Discussion. "
-        "Your superpower is active listening, emotional intelligence, and diplomatic synthesis. "
-        "You resolve deadlocks by finding common threads between conflicting opinions, especially building constructively "
-        "on points made by the candidate ('User') and acknowledging peers by name. "
-        "Your tone is empathetic, collaborative, encouraging, and constructive. "
-        "Use phrases like 'I see a valuable middle ground between Priya and the candidate' or 'Adding to that thought'."
+        "You are Priya, the Bridger in an Indian campus placement Group Discussion. "
+        "Your strength is active listening and finding constructive common ground. "
+        "You bridge opposing views between Kabir and Anushka, and build warmly on the candidate's insights. "
+        "Speak in 1-2 collaborative, spoken sentences (under 30 words). Never use markdown or speaker prefixes."
     ),
 )
+
+QUIET_ANALYST = Persona(
+    avatar_id="quiet_analyst",
+    name="Rohan",
+    voice_speaker="arvind",
+    role_title="The Quiet Strategic Thinker",
+    turn_weight=0.10,
+    system_prompt=(
+        "You are Rohan, a calm, strategic thinker in an Indian campus placement Group Discussion. "
+        "You intervene less frequently, but when you speak, you introduce deep second-order implications and long-term vision. "
+        "Speak in 1-2 reflective, spoken sentences (under 30 words). Never use markdown or speaker prefixes."
+    ),
+)
+
+ORDERED_PANEL: List[Persona] = [
+    MODERATOR,
+    DOMINATOR,
+    DATA_DRIVEN,
+    BRIDGER,
+    QUIET_ANALYST,
+]
 
 PERSONA_REGISTRY: Dict[str, Persona] = {
     "moderator": MODERATOR,
@@ -103,6 +127,8 @@ PERSONA_REGISTRY: Dict[str, Persona] = {
     "data_driven": DATA_DRIVEN,
     "data-driven": DATA_DRIVEN,
     "bridger": BRIDGER,
+    "quiet_analyst": QUIET_ANALYST,
+    "quiet-analyst": QUIET_ANALYST,
 }
 
 
@@ -112,14 +138,6 @@ def get_persona_by_id(avatar_id: str) -> Optional[Persona]:
 
 
 def get_active_panel(panel_size: int = 3) -> List[Persona]:
-    """Select the active panel of AI participants for the session.
-
-    Default panel of 3: Moderator (Arjun), Dominator (Priya), Bridger (Meera).
-    Panel of 4: includes Data-Driven (Anushka).
-    """
-    if panel_size >= 4:
-        return [MODERATOR, DOMINATOR, DATA_DRIVEN, BRIDGER]
-    if panel_size == 2:
-        return [MODERATOR, DOMINATOR]
-    # Default 3: High-engagement dynamic trio
-    return [MODERATOR, DOMINATOR, BRIDGER]
+    """Activate the first N personas when panel size is N (3 to 5)."""
+    clamped_size = max(1, min(len(ORDERED_PANEL), panel_size))
+    return ORDERED_PANEL[:clamped_size]

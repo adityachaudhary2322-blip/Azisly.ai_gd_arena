@@ -1,14 +1,15 @@
 """Sarvam AI Text-to-Speech (TTS) Client Wrapper.
 
-Synthesizes speech using Sarvam AI's Bulbul v3 model.
-Maps GD Arena persona archetypes to distinct Sarvam voice speakers:
-- Moderator: "arjun"
-- Dominator: "shubh"
-- Data-Driven: "anushka"
-- Bridger: "meera"
+Synthesizes speech using Sarvam Bulbul v3 model (https://api.sarvam.ai/text-to-speech).
+Maps the 5 GD Arena persona avatar_ids to exact Sarvam voice identifiers:
+- moderator      -> 'arjun'
+- dominator      -> 'shubh'
+- data_driven    -> 'anushka'
+- bridger        -> 'meera'
+- quiet_analyst  -> 'arvind'
 
-Supports mock voice generation returning valid base64-encoded silent WAV audio
-to preserve Sarvam API credits.
+Returns raw base64 audio payload matching SCHEMA.md agent_speaking.
+Includes a dummy silent WAV mock mode when MOCK_VOICE=True or missing API key.
 """
 
 import base64
@@ -22,29 +23,36 @@ from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Persona to speaker mapping as specified for GD Arena
-PERSONA_VOICE_MAP: dict[str, str] = {
+# Avatar ID / Persona name to Sarvam voice identifier mapping
+AVATAR_TO_VOICE_MAP: dict[str, str] = {
+    # Avatar identifiers
     "moderator": "arjun",
     "dominator": "shubh",
-    "data-driven": "anushka",
     "data_driven": "anushka",
-    "datadriven": "anushka",
+    "data-driven": "anushka",
     "bridger": "meera",
+    "quiet_analyst": "arvind",
+    "quiet-analyst": "arvind",
+    # Persona character names
+    "arjun": "arjun",
+    "kabir": "shubh",
+    "shubh": "shubh",
+    "anushka": "anushka",
+    "priya": "meera",
+    "meera": "meera",
+    "rohan": "arvind",
+    "arvind": "arvind",
 }
 
 
-def resolve_speaker(speaker: str) -> str:
-    """Resolve persona name or speaker identifier to a valid Sarvam speaker.
-
-    If given a persona name (case-insensitive), returns the mapped speaker.
-    Otherwise, returns the provided speaker unchanged.
-    """
-    key = speaker.strip().lower()
-    return PERSONA_VOICE_MAP.get(key, speaker)
+def resolve_speaker(avatar_id_or_speaker: str) -> str:
+    """Resolve avatar identifier or persona name to an exact Sarvam speaker voice."""
+    key = avatar_id_or_speaker.strip().lower()
+    return AVATAR_TO_VOICE_MAP.get(key, avatar_id_or_speaker)
 
 
 def generate_mock_wav_base64(duration_seconds: float = 0.5, sample_rate: int = 16000) -> str:
-    """Generate a valid silent mono PCM WAV payload encoded in base64."""
+    """Generate a valid silent mono 16-bit PCM WAV payload encoded in base64."""
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wav_file:
         wav_file.setnchannels(1)  # Mono
@@ -55,13 +63,13 @@ def generate_mock_wav_base64(duration_seconds: float = 0.5, sample_rate: int = 1
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
-# Pre-computed mock WAV payload
+# Pre-computed mock silent WAV payload
 MOCK_AUDIO_PAYLOAD: str = generate_mock_wav_base64()
 
 
 async def synthesize_speech(
     text: str,
-    speaker: str = "shubh",
+    speaker: str = "arjun",
     language_code: str = "en-IN",
     model: str = "bulbul:v3",
     pace: float = 1.0,
@@ -71,23 +79,23 @@ async def synthesize_speech(
 
     Args:
         text: Input text string to synthesize.
-        speaker: Persona name ('Moderator', 'Dominator', 'Data-Driven', 'Bridger')
-                 or Sarvam speaker name ('arjun', 'shubh', 'anushka', 'meera').
+        speaker: Avatar ID ('moderator', 'dominator', 'data_driven', 'bridger', 'quiet_analyst')
+                 or Sarvam voice identifier ('arjun', 'shubh', 'anushka', 'meera', 'arvind').
         language_code: Target BCP-47 language code (default: 'en-IN').
         model: Sarvam TTS model name (default: 'bulbul:v3').
         pace: Speech tempo between 0.5 and 2.0 (default: 1.0).
         client: Optional httpx.AsyncClient instance for testing / reuse.
 
     Returns:
-        Base64-encoded audio string from response audios[0].
+        Base64-encoded audio string from response audios[0] matching SCHEMA.md.
 
     Raises:
         httpx.HTTPStatusError: If Sarvam API responds with HTTP error status.
         httpx.RequestError: If network error occurs.
         ValueError: If no audio is returned in the API response.
     """
-    if settings.MOCK_VOICE:
-        logger.info("MOCK_VOICE is enabled. Returning mock base64 WAV payload.")
+    if settings.MOCK_VOICE or not settings.SARVAM_API_KEY.strip():
+        logger.debug("MOCK_VOICE active or missing API key. Returning mock base64 WAV payload.")
         return MOCK_AUDIO_PAYLOAD
 
     if not text.strip():

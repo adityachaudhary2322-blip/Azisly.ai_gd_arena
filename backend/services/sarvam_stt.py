@@ -1,11 +1,15 @@
 """Sarvam AI Speech-to-Text (STT) Client Wrapper.
 
-Provides transcription capabilities using Sarvam AI's Saaras v4 model.
-Supports mock voice transcription to conserve API credits during testing/development.
+Wraps Sarvam's Saaras v4 model (https://api.sarvam.ai/speech-to-text).
+Ingests 16-bit PCM 16kHz mono audio chunks, packages them into standard WAV containers,
+and supports both 'en-IN' and 'hi-IN' language codes.
+Includes instant mock bypass when MOCK_VOICE=True.
 """
 
+import io
 import logging
 from typing import Optional
+import wave
 import httpx
 
 from backend.config import settings
@@ -18,6 +22,28 @@ MOCK_TRANSCRIPTION = (
 )
 
 
+def pcm_to_wav_bytes(
+    pcm_data: bytes,
+    sample_rate: int = 16000,
+    channels: int = 1,
+    sample_width: int = 2,
+) -> bytes:
+    """Package raw 16-bit PCM mono audio data into a valid WAV format container."""
+    if not pcm_data:
+        return b""
+    # If the payload is already an encapsulated WAV file, return as is
+    if pcm_data.startswith(b"RIFF") and len(pcm_data) > 12:
+        return pcm_data
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(sample_width)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(pcm_data)
+    return buffer.getvalue()
+
+
 async def transcribe_audio_bytes(
     audio_bytes: bytes,
     language_code: str = "en-IN",
@@ -28,11 +54,11 @@ async def transcribe_audio_bytes(
     """Transcribe raw audio bytes using Sarvam Saaras v4 API.
 
     Args:
-        audio_bytes: Raw audio byte content (e.g. WAV/MP3 format).
-        language_code: Target BCP-47 language code (default: 'en-IN').
+        audio_bytes: Raw 16-bit PCM 16kHz mono bytes or WAV audio bytes.
+        language_code: Target BCP-47 language code ('en-IN' or 'hi-IN').
         model: Sarvam STT model version (default: 'saaras:v4').
         mode: Transcription mode (default: 'transcribe').
-        client: Optional httpx.AsyncClient instance for connection pooling / testing.
+        client: Optional httpx.AsyncClient instance for testing / reuse.
 
     Returns:
         The transcribed text string.
@@ -41,20 +67,23 @@ async def transcribe_audio_bytes(
         httpx.HTTPStatusError: If the Sarvam API returns an HTTP error code.
         httpx.RequestError: If network/connection issues occur.
     """
-    if settings.MOCK_VOICE:
-        logger.info("MOCK_VOICE is enabled. Returning mock transcription.")
+    if settings.MOCK_VOICE or not settings.SARVAM_API_KEY.strip():
+        logger.debug("MOCK_VOICE active or missing API key. Returning mock transcription.")
         return MOCK_TRANSCRIPTION
 
     if not audio_bytes:
         logger.warning("Empty audio bytes provided for transcription.")
         return ""
 
+    # Ensure audio is properly packaged into a standard WAV container
+    wav_payload = pcm_to_wav_bytes(audio_bytes)
+
     headers = {
         "api-subscription-key": settings.SARVAM_API_KEY,
     }
 
     files = {
-        "file": ("audio.wav", audio_bytes, "audio/wav"),
+        "file": ("audio.wav", wav_payload, "audio/wav"),
     }
 
     data = {

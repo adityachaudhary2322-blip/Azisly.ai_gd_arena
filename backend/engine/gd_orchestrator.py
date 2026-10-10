@@ -1,11 +1,10 @@
-"""Turn-taking state machine and conversation orchestrator for GD Arena.
+"""Turn-taking state machine and multi-agent conversation orchestrator for GD Arena.
 
-Features:
-- Monitors conversational pauses with a strict 2.5s threshold.
-- Dynamically assigns floor to AI speakers based on panel personas.
-- Immediately halts active AI speech upon receiving 'user_interrupted' signal.
-- Dispatches timer heartbeats ('timer_tick') and live transcript updates ('transcript_update').
-- Concludes sessions with comprehensive metrics & verbatim evaluation ('final_report').
+100% Sarvam AI powered (Saaras STT, Sarvam LLM, Bulbul TTS):
+- Tracks elapsed time, conversational floor state, and speaker timestamps.
+- Generates in-character responses via sarvam_llm.py and synthesizes audio via sarvam_tts.py.
+- Immediate interruption control: sets an abort flag to halt active agent speech on 'user_interrupted'.
+- Activates first N personas (3 to 5) based on panel size.
 - Strictly adheres to SCHEMA.md contract.
 """
 
@@ -22,17 +21,13 @@ from backend.engine.personas import (
     Persona,
     get_active_panel,
     get_persona_by_id,
-    MODERATOR,
-    DOMINATOR,
-    BRIDGER,
 )
-from backend.services.gemini_client import generate_persona_utterance
+from backend.services.sarvam_llm import get_sarvam_completion
 from backend.services.sarvam_stt import transcribe_audio_bytes
 from backend.services.sarvam_tts import synthesize_speech
 
 logger = logging.getLogger(__name__)
 
-# Callback type for sending WebSocket messages to the client
 SendCallback = Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]
 
 PAUSE_THRESHOLD_SECONDS = 2.5
@@ -40,12 +35,12 @@ DEFAULT_SESSION_SECONDS = 420
 
 
 class GDOrchestrator:
-    """State machine governing Group Discussion session dynamics and turn-taking."""
+    """State machine governing multi-agent Group Discussion session dynamics."""
 
     def __init__(self, send_callback: SendCallback):
         self.send_callback = send_callback
 
-        # Session attributes
+        # Session configuration
         self.topic: str = "Campus Recruitment Discussion"
         self.panel_size: int = 3
         self.language: str = "en-IN"
@@ -62,8 +57,10 @@ class GDOrchestrator:
         self.last_ai_speaker: Optional[str] = None
         self.interruptions_handled: int = 0
 
-        # Audio buffering & asynchronous tasks
+        # Audio buffering (16-bit PCM 16kHz mono chunks)
         self.user_audio_buffer = bytearray()
+
+        # Asynchronous tasks and interruption flags
         self.active_turn_task: Optional[asyncio.Task] = None
         self.pause_timer_task: Optional[asyncio.Task] = None
         self.timer_heartbeat_task: Optional[asyncio.Task] = None
@@ -74,7 +71,7 @@ class GDOrchestrator:
     # -----------------------------------------------------------------------
 
     async def handle_client_message(self, message: Dict[str, Any]) -> None:
-        """Process incoming WebSocket messages from client according to SCHEMA.md."""
+        """Route client WebSocket messages adhering to SCHEMA.md."""
         msg_type = message.get("type")
 
         if msg_type == "start_session":
@@ -90,7 +87,7 @@ class GDOrchestrator:
         elif msg_type == "end_session":
             await self.end_session()
         else:
-            logger.warning("Unrecognized message type received: %s", msg_type)
+            logger.warning("Unknown client message received: %s", msg_type)
 
     # -----------------------------------------------------------------------
     # Session Lifecycle
@@ -102,11 +99,11 @@ class GDOrchestrator:
         panel_size: int = 3,
         language: str = "en-IN",
     ) -> None:
-        """Initialize and launch the GD session."""
+        """Initialize session and activate the first N panel personas."""
         self.topic = topic
-        self.panel_size = panel_size
+        self.panel_size = max(3, min(5, panel_size))
         self.language = language
-        self.panel = get_active_panel(panel_size)
+        self.panel = get_active_panel(self.panel_size)
         self.start_time = time.time()
         self.seconds_left = DEFAULT_SESSION_SECONDS
         self.is_active = True
@@ -117,30 +114,29 @@ class GDOrchestrator:
         self.is_ai_speaking = False
 
         logger.info(
-            "Starting GD Session: topic='%s', panel_size=%d, language=%s",
-            topic,
-            panel_size,
-            language,
+            "Session initiated: topic='%s', panel_size=%d (%s), language=%s",
+            self.topic,
+            len(self.panel),
+            [p.name for p in self.panel],
+            self.language,
         )
 
-        # Start timer heartbeat
+        # Start timer heartbeat broadcasting timer_tick every second
         self._cancel_task(self.timer_heartbeat_task)
         self.timer_heartbeat_task = asyncio.create_task(self._run_timer_heartbeat())
 
-        # Moderator opens the discussion to establish structure
-        moderator = next((p for p in self.panel if p.avatar_id == "moderator"), self.panel[0])
+        # Moderator delivers opening structure
+        moderator = self.panel[0]
+        opening_prompt = (
+            f"Welcome to this group discussion on '{self.topic}'. "
+            "Let us establish a balanced framework examining both technological potential and socioeconomic impact."
+        )
         self.active_turn_task = asyncio.create_task(
-            self._execute_ai_turn(
-                moderator,
-                custom_text=(
-                    f"Welcome everyone to this discussion on '{self.topic}'. "
-                    "Let us examine both the opportunities and key challenges ahead."
-                ),
-            )
+            self._execute_ai_turn(moderator, forced_text=opening_prompt)
         )
 
     async def end_session(self) -> None:
-        """Terminate the session and emit final evaluation report."""
+        """Conclude session, compute metrics, and dispatch final_report."""
         if not self.is_active:
             return
 
@@ -149,7 +145,7 @@ class GDOrchestrator:
         self._cancel_task(self.pause_timer_task)
         self._cancel_task(self.active_turn_task)
 
-        # Process any pending user audio in the buffer
+        # Flush any remaining speech buffer
         await self._flush_user_audio_buffer()
 
         report = await evaluate_session(
@@ -158,41 +154,41 @@ class GDOrchestrator:
         )
 
         await self._send(report)
-        logger.info("GD session concluded. Final report dispatched.")
+        logger.info("Session ended. Dispatched final_report matching SCHEMA.md.")
 
     # -----------------------------------------------------------------------
-    # Audio Chunk & Turn Detection
+    # Audio Ingestion & Pause Monitoring
     # -----------------------------------------------------------------------
 
     async def handle_audio_chunk(self, base64_data: str) -> None:
-        """Handle incoming user audio streaming chunk."""
+        """Ingest raw 16-bit PCM 16kHz mono audio chunk from frontend."""
         if not self.is_active or not base64_data:
             return
 
         try:
-            raw_bytes = base64.b64decode(base64_data)
-            self.user_audio_buffer.extend(raw_bytes)
+            pcm_chunk = base64.b64decode(base64_data)
+            self.user_audio_buffer.extend(pcm_chunk)
         except Exception as exc:
             logger.error("Failed to decode base64 audio chunk: %s", exc)
             return
 
-        # If user starts speaking while AI is speaking, treat as immediate interruption
+        # If user speaks during an AI turn, trigger immediate interruption
         if self.is_ai_speaking:
             await self.handle_user_interrupted()
 
-        # Reset pause monitoring timer (2.5s threshold)
+        # Restart 2.5s conversational pause timer
         self._restart_pause_timer()
 
     async def handle_user_interrupted(self) -> None:
-        """Handle 'user_interrupted' signal from client."""
+        """Handle user_interrupted signal from client immediately."""
         if not self.is_active:
             return
 
         if self.is_ai_speaking and self.current_speaker:
             interrupted_speaker = self.current_speaker
-            logger.info("User interrupted AI speaker: %s", interrupted_speaker)
+            logger.info("Interruption triggered against: %s", interrupted_speaker)
 
-            # Signal cancellation to active speech task
+            # Abort active turn task immediately to drop audio
             self.interrupt_event.set()
             self._cancel_task(self.active_turn_task)
 
@@ -201,17 +197,17 @@ class GDOrchestrator:
             self.current_avatar_id = None
             self.interruptions_handled += 1
 
-            # Dispatch 'agent_interrupted' as per SCHEMA.md
+            # Dispatch agent_interrupted message as per SCHEMA.md
             await self._send({
                 "type": "agent_interrupted",
                 "speaker": interrupted_speaker,
             })
 
-            # Restart pause monitor so orchestrator listens for the user's interjection
+            # Monitor silence following the interruption
             self._restart_pause_timer()
 
     def _restart_pause_timer(self) -> None:
-        """Reset the 2.5s conversational pause timer."""
+        """Reset the 2.5s pause monitoring timer."""
         self._cancel_task(self.pause_timer_task)
         self.pause_timer_task = asyncio.create_task(self._pause_monitor())
 
@@ -222,64 +218,63 @@ class GDOrchestrator:
             if not self.is_active:
                 return
 
-            # Flush any accumulated user audio first
+            # Transcribe accumulated user PCM bytes
             await self._flush_user_audio_buffer()
 
             # Assign floor to next AI participant
-            next_speaker = self._select_next_speaker()
-            if next_speaker and not self.is_ai_speaking:
+            next_persona = self._select_next_speaker()
+            if next_persona and not self.is_ai_speaking:
                 self._cancel_task(self.active_turn_task)
-                self.active_turn_task = asyncio.create_task(self._execute_ai_turn(next_speaker))
+                self.active_turn_task = asyncio.create_task(self._execute_ai_turn(next_persona))
 
         except asyncio.CancelledError:
             pass
 
     async def _flush_user_audio_buffer(self) -> None:
-        """Transcribe and append user audio buffer if content exists."""
+        """Transcribe accumulated PCM audio via Sarvam Saaras STT and append to transcript."""
         if not self.user_audio_buffer:
             return
 
-        audio_bytes = bytes(self.user_audio_buffer)
+        pcm_bytes = bytes(self.user_audio_buffer)
         self.user_audio_buffer.clear()
 
         try:
             transcription = await transcribe_audio_bytes(
-                audio_bytes=audio_bytes,
+                audio_bytes=pcm_bytes,
                 language_code=self.language,
             )
-            if transcription.strip():
+            clean_text = transcription.strip()
+            if clean_text:
                 timestamp = self._get_current_timestamp()
-                self._append_transcript("User", transcription, timestamp)
+                self._append_transcript("User", clean_text, timestamp)
                 await self._send({
                     "type": "transcript_update",
                     "speaker": "User",
-                    "text": transcription,
+                    "text": clean_text,
                     "timestamp": timestamp,
                 })
         except Exception as exc:
-            logger.error("Error transcribing user audio: %s", exc)
+            logger.error("Error transcribing user audio via Sarvam STT: %s", exc)
 
     # -----------------------------------------------------------------------
-    # AI Speaker Turn Execution
+    # Dynamic Turn Taking & AI Execution
     # -----------------------------------------------------------------------
 
     def _select_next_speaker(self) -> Persona:
-        """Select next AI speaker dynamically avoiding repetition."""
-        available = [p for p in self.panel if p.name != self.last_ai_speaker]
-        if not available:
-            available = self.panel
+        """Select next AI speaker using weighted personality distribution."""
+        candidates = [p for p in self.panel if p.name != self.last_ai_speaker]
+        if not candidates:
+            candidates = self.panel
 
-        # Weighted selection based on persona dynamics
-        weights = [p.turn_weight for p in available]
-        chosen = random.choices(available, weights=weights, k=1)[0]
-        return chosen
+        weights = [p.turn_weight for p in candidates]
+        return random.choices(candidates, weights=weights, k=1)[0]
 
     async def _execute_ai_turn(
         self,
         persona: Persona,
-        custom_text: Optional[str] = None,
+        forced_text: Optional[str] = None,
     ) -> None:
-        """Synthesize and stream dialogue for an AI participant."""
+        """Generate dialogue via Sarvam LLM and synthesize voice via Sarvam TTS."""
         self.interrupt_event.clear()
         self.is_ai_speaking = True
         self.current_speaker = persona.name
@@ -287,35 +282,43 @@ class GDOrchestrator:
         self.last_ai_speaker = persona.name
 
         try:
-            # 1. Generate text
-            if custom_text:
-                utterance_text = custom_text
+            # 1. Generate text using Sarvam Chat completions
+            if forced_text:
+                dialogue_text = forced_text
             else:
-                utterance_text = await generate_persona_utterance(
-                    persona=persona,
+                messages = persona.format_chat_messages(
                     topic=self.topic,
                     recent_transcripts=self.transcript,
                 )
+                dialogue_text = await get_sarvam_completion(
+                    messages=messages,
+                    temperature=0.2,
+                    max_tokens=60,
+                )
+
+                # Clean any accidental speaker prefixes
+                if ":" in dialogue_text and len(dialogue_text.split(":")[0]) < 15:
+                    dialogue_text = dialogue_text.split(":", 1)[1].strip()
 
             timestamp = self._get_current_timestamp()
-            self._append_transcript(persona.name, utterance_text, timestamp)
+            self._append_transcript(persona.name, dialogue_text, timestamp)
 
-            # 2. Emit transcript update
+            # 2. Dispatch transcript update as per SCHEMA.md
             await self._send({
                 "type": "transcript_update",
                 "speaker": persona.name,
-                "text": utterance_text,
+                "text": dialogue_text,
                 "timestamp": timestamp,
             })
 
-            # 3. Synthesize audio
+            # 3. Synthesize speech via Sarvam Bulbul v3 TTS
             audio_base64 = await synthesize_speech(
-                text=utterance_text,
-                speaker=persona.voice_speaker,
+                text=dialogue_text,
+                speaker=persona.avatar_id,
                 language_code=self.language,
             )
 
-            # 4. Emit agent_speaking message
+            # 4. Dispatch agent_speaking message as per SCHEMA.md
             await self._send({
                 "type": "agent_speaking",
                 "speaker": persona.name,
@@ -323,15 +326,15 @@ class GDOrchestrator:
                 "audio_base64": audio_base64,
             })
 
-            # 5. Simulate speaking duration with interruption vigilance
-            word_count = len(utterance_text.split())
-            speaking_duration = max(1.5, word_count * 0.3)
-
+            # 5. Playback duration simulation with abort vigilance
+            word_count = len(dialogue_text.split())
+            duration = max(1.5, word_count * 0.28)
             elapsed = 0.0
             step = 0.1
-            while elapsed < speaking_duration:
+
+            while elapsed < duration:
                 if self.interrupt_event.is_set():
-                    logger.info("Speech playback aborted mid-turn for %s", persona.name)
+                    logger.info("Playback aborted mid-speech for %s", persona.name)
                     return
                 await asyncio.sleep(step)
                 elapsed += step
@@ -340,12 +343,11 @@ class GDOrchestrator:
             logger.info("AI turn task cancelled for %s", persona.name)
             return
         except Exception as exc:
-            logger.error("Error executing AI turn for %s: %s", persona.name, exc)
+            logger.error("Error during AI turn for %s: %s", persona.name, exc)
         finally:
             self.is_ai_speaking = False
             self.current_speaker = None
             self.current_avatar_id = None
-            # If session is still active and no interruption occurred, initiate next pause window
             if self.is_active and not self.interrupt_event.is_set():
                 self._restart_pause_timer()
 
@@ -354,7 +356,7 @@ class GDOrchestrator:
     # -----------------------------------------------------------------------
 
     async def _run_timer_heartbeat(self) -> None:
-        """Broadcast 'timer_tick' every second until session expiration."""
+        """Broadcast 'timer_tick' every second until session expiry."""
         try:
             while self.is_active and self.seconds_left > 0:
                 await self._send({
@@ -370,7 +372,7 @@ class GDOrchestrator:
             pass
 
     def _get_current_timestamp(self) -> float:
-        """Get elapsed session time in seconds formatted to 1 decimal place."""
+        """Get elapsed session time formatted to 1 decimal place."""
         if self.start_time <= 0:
             return 0.0
         return round(time.time() - self.start_time, 1)
@@ -384,14 +386,14 @@ class GDOrchestrator:
         })
 
     async def _send(self, payload: Dict[str, Any]) -> None:
-        """Send message safely through the provided send callback."""
+        """Safely send message to client callback."""
         try:
             await self.send_callback(payload)
         except Exception as exc:
-            logger.error("Error dispatching message to WebSocket client: %s", exc)
+            logger.error("Error delivering message to WebSocket: %s", exc)
 
     @staticmethod
     def _cancel_task(task: Optional[asyncio.Task]) -> None:
-        """Safely cancel an asynchronous task if running."""
+        """Cancel an asynchronous task safely."""
         if task is not None and not task.done():
             task.cancel()
