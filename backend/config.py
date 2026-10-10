@@ -15,6 +15,8 @@ BASE_DIR = Path(__file__).resolve().parent
 
 SUPPORTED_LANGUAGES: Set[str] = {
     "en-IN",
+    "en-US",  # American English dialogue; Sarvam speech runs as en-IN
+    "hinglish",  # Hindi + English mix in Roman script; Sarvam speech runs as hi-IN
     "hi-IN",
     "ta-IN",
     "te-IN",

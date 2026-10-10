@@ -16,8 +16,17 @@ from typing import Dict, List, Optional
 
 LANGUAGE_PROMPTS: Dict[str, str] = {
     "hi-IN": (
-        "Strict Language Instruction: You MUST converse strictly in Hindi or professional corporate Hinglish "
-        "as naturally spoken in Indian campus placement group discussions. Do NOT reply in pure English."
+        "Strict Language Instruction: You MUST converse strictly in Hindi, written in Devanagari script, "
+        "as naturally spoken in Indian campus placement group discussions. Common English technical "
+        "terms may stay in English. Do NOT reply in English sentences."
+    ),
+    "hinglish": (
+        "Strict Language Instruction: You MUST converse in Hindi or professional corporate Hinglish "
+        "(a natural Hindi + English mix, written in Roman script) as naturally spoken in Indian campus "
+        "placement group discussions. Do NOT reply in pure English or in Devanagari."
+    ),
+    "en-US": (
+        "Strict Language Instruction: You MUST converse in natural, professional American English."
     ),
     "ta-IN": (
         "Strict Language Instruction: You MUST converse strictly in Tamil or professional Tanglish "

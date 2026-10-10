@@ -275,17 +275,25 @@ async def test_orchestrator_panel_size_5():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_indic_language_flow():
-    """Verify start_session with Indic language (hi-IN) sets language and Hindi opening."""
+@pytest.mark.parametrize(
+    "language, greeting, speech_code",
+    [
+        ("hinglish", "swagat hai", "hi-IN"),  # Roman-script Hindi + English
+        ("hi-IN", "स्वागत है", "hi-IN"),  # Devanagari Hindi
+        ("en-US", "Welcome", "en-IN"),  # American English text, Sarvam speech as en-IN
+    ],
+)
+async def test_orchestrator_language_options(language, greeting, speech_code):
+    """Each lobby language opens in the right script and uses a Sarvam-supported speech code."""
     client = Client()
     orchestrator = client.orchestrator
-    await orchestrator.start_session(topic="Artificial Intelligence", panel_size=3, language="hi-IN")
+    await orchestrator.start_session(topic="Artificial Intelligence", panel_size=3, language=language)
 
-    assert orchestrator.language == "hi-IN"
+    assert orchestrator.language == language
+    assert orchestrator.speech_language == speech_code
     await asyncio.sleep(0.05)
 
-    hindi_opening = [t for t in client.texts("Arjun") if "swagat hai" in t]
-    assert len(hindi_opening) == 1
+    assert len([t for t in client.texts("Arjun") if greeting in t]) == 1
 
     await orchestrator.end_session()
 

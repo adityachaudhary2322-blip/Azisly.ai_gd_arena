@@ -72,10 +72,15 @@ def test_persona_language_prompt_formatting():
     messages_hi = MODERATOR.format_chat_messages(
         topic="Fintech Disruption",
         recent_transcripts=[{"speaker": "User", "text": "UPI growth has been exponential."}],
-        language="hi-IN",
+        language="hinglish",
     )
     system_msg = next(m["content"] for m in messages_hi if m["role"] == "system")
     assert "Hindi or professional corporate Hinglish" in system_msg
+
+    messages_hindi = MODERATOR.format_chat_messages(
+        topic="Fintech Disruption", recent_transcripts=[], language="hi-IN",
+    )
+    assert "Devanagari" in messages_hindi[0]["content"]
 
     messages_ta = DOMINATOR.format_chat_messages(
         topic="Fintech Disruption",

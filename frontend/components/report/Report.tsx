@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { EmptyState } from "@/components/EmptyState";
+import { DetailedScores } from "@/components/report/DetailedScores";
 import { useGDSession } from "@/components/GDSessionProvider";
 import { SeatAvatar } from "@/components/SeatAvatar";
 import { formatClock, wordCount } from "@/lib/format";
@@ -101,10 +102,12 @@ export function Report() {
         </div>
       </header>
 
-      {/* Headline scores */}
+      <DetailedScores report={report} />
+
+      {/* Headline metrics */}
       <section aria-labelledby="scores-h" className="space-y-4">
         <h2 id="scores-h" className="text-lg font-semibold">
-          Evaluation scores
+          Session metrics
         </h2>
         <div className="grid gap-4 sm:grid-cols-3">
           <StatTile

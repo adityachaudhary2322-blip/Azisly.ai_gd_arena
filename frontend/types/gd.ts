@@ -29,7 +29,7 @@ export interface StartSession {
   type: "start_session";
   topic: string;
   panel_size: number;
-  /** BCP-47 tag, e.g. "en-IN"; "hi-IN" is Hindi + English (Hinglish). */
+  /** "en-IN" | "en-US" | "hi-IN" (Hindi, Devanagari) | "hinglish" (Hindi + English, Roman script). */
   language: string;
   /** Optional background used to tailor panel questions. */
   profile?: CandidateProfile;
@@ -132,10 +132,36 @@ export interface FeedbackItem {
   analysis: string;
 }
 
+export interface CategoryScore {
+  key: "fluency" | "clarity" | "logic" | "knowledge" | "confidence" | "engagement" | (string & {});
+  label: string;
+  /** 0-10, one decimal. */
+  score: number;
+  /** Why this score, in one sentence. */
+  summary: string;
+  /** One specific thing to do differently. */
+  tip: string;
+}
+
+/** Measured delivery signals behind the scores. */
+export interface DeliveryStats {
+  words_per_minute: number | null;
+  filler_words: number;
+  avg_response_seconds: number | null;
+  questions_answered: number;
+  questions_asked: number;
+}
+
 export interface FinalReport {
   type: "final_report";
   metrics: ReportMetrics;
   feedback: FeedbackItem[];
+  /** Detailed scoring; absent from older backends. */
+  scores?: CategoryScore[];
+  overall_score?: number;
+  strengths?: string[];
+  improvements?: string[];
+  delivery?: DeliveryStats;
 }
 
 export type ServerMessage =

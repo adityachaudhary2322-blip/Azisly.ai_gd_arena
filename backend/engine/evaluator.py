@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from backend.config import settings
+from backend.engine.scoring import compute_scores, merge_llm_judgement
 from backend.services.sarvam_llm import get_sarvam_completion
 
 logger = logging.getLogger(__name__)
@@ -147,10 +148,25 @@ def extract_deterministic_feedback(
     return feedback
 
 
+def _extract_json(raw: str) -> Optional[Dict[str, Any]]:
+    """Parse the first JSON object in an LLM reply (models often wrap it in prose or fences)."""
+    raw = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.DOTALL)
+    start, end = raw.find("{"), raw.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(raw[start:end + 1])
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 async def evaluate_session(
     transcripts: List[Dict[str, Any]],
     interruptions_count: int = 0,
     client: Optional[httpx.AsyncClient] = None,
+    delivery: Optional[Dict[str, Any]] = None,
+    topic: str = "",
 ) -> Dict[str, Any]:
     """Parse session transcripts and produce the final evaluation report matching SCHEMA.md.
 
@@ -158,6 +174,12 @@ async def evaluate_session(
     with deterministic fallback for mock mode.
     """
     metrics = calculate_transcript_metrics(transcripts, interruptions_count)
+    detail = compute_scores(
+        transcripts,
+        delivery=delivery,
+        topic=topic,
+        user_percent=metrics["speaking_time_user_percent"],
+    )
 
     # In mock mode or missing API key, directly extract verbatim quotes from transcripts
     if settings.MOCK_VOICE or not settings.SARVAM_API_KEY.strip():
@@ -166,6 +188,7 @@ async def evaluate_session(
             "type": "final_report",
             "metrics": metrics,
             "feedback": feedback,
+            **detail,
         }
 
     # Attempt evaluation via live Sarvam LLM
@@ -180,28 +203,38 @@ async def evaluate_session(
                 "content": (
                     "You are an expert Indian campus placement Group Discussion evaluator. "
                     "Evaluate the candidate ('User') strictly citing verbatim quotes from their speech. "
+                    "Score their logic & structure and their knowledge & relevance to the topic from 0 to 10, "
+                    "with a one-sentence reason each, and give 3 short, specific, actionable improvements. "
                     "Return ONLY valid JSON format: "
-                    '{"feedback": [{"criterion": "string", "quote": "verbatim user quote", "analysis": "string"}]}'
+                    '{"feedback": [{"criterion": "string", "quote": "verbatim user quote", "analysis": "string"}], '
+                    '"logic": {"score": 0, "reason": "string"}, '
+                    '"knowledge": {"score": 0, "reason": "string"}, '
+                    '"improvements": ["string", "string", "string"]}'
                 ),
             },
             {
                 "role": "user",
-                "content": f"Transcript:\n{formatted_history}\n\nMetrics:\n{json.dumps(metrics)}",
+                "content": (
+                    f"Topic: {topic}\n"
+                    f"Transcript:\n{formatted_history}\n\nMetrics:\n{json.dumps(metrics)}"
+                ),
             },
         ]
 
         raw_completion = await get_sarvam_completion(
             messages=prompt_messages,
             temperature=0.1,
-            max_tokens=300,
+            max_tokens=600,
             client=client,
         )
 
-        parsed = json.loads(raw_completion)
-        if isinstance(parsed, dict) and "feedback" in parsed and isinstance(parsed["feedback"], list):
+        parsed = _extract_json(raw_completion)
+        if parsed and isinstance(parsed.get("feedback"), list) and parsed["feedback"]:
             feedback = parsed["feedback"]
         else:
             feedback = extract_deterministic_feedback(transcripts, metrics)
+        if parsed and transcript_has_user(transcripts):
+            detail = merge_llm_judgement(detail, parsed)
     except Exception as exc:
         logger.debug("Evaluation fallback used: %s", exc)
         feedback = extract_deterministic_feedback(transcripts, metrics)
@@ -210,4 +243,12 @@ async def evaluate_session(
         "type": "final_report",
         "metrics": metrics,
         "feedback": feedback,
+        **detail,
     }
+
+
+def transcript_has_user(transcripts: List[Dict[str, Any]]) -> bool:
+    return any(
+        e.get("speaker", "").lower() in ("user", "candidate") and e.get("text", "").strip()
+        for e in transcripts
+    )

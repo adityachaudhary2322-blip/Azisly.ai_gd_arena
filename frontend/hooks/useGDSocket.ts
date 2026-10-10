@@ -11,6 +11,7 @@ import type {
   StartSession,
   TranscriptUpdate,
 } from "@/types/gd";
+import { PERSONAS, personaFromAvatarId } from "@/lib/personas";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -224,12 +225,36 @@ function hashString(s: string): number {
   return h;
 }
 
-/** A stable browser voice per panelist, preferring the session language. */
-function pickVoice(voices: SpeechSynthesisVoice[], lang: string, speaker: string) {
+type VoiceGender = "female" | "male";
+
+const FEMALE_VOICE = /female|woman|zira|heera|neerja|swara|kalpana|veena|lekha|samantha|karen|moira|tessa|susan|hazel|aria|jenny|sonia|libby|natasha|clara|ava|allison|kavya|priya|ananya|aditi|raveena/i;
+const MALE_VOICE = /\bmale|\bman\b|david|mark|ravi|hemant|prabhat|madhur|daniel|alex|fred|guy|ryan|george|james|thomas|arthur|rishi|aaron|tom|oliver/i;
+
+/** Browser speech language for a session language (Hinglish is Roman script, so read it as en-IN). */
+function voiceLanguage(language: string): string {
+  return language === "hinglish" ? "en-IN" : language;
+}
+
+/** Female personas get a female browser voice, male personas a male one. */
+function genderForSpeaker(speaker: string, avatarId?: string): VoiceGender {
+  const byAvatar = avatarId ? personaFromAvatarId(avatarId) : null;
+  const persona = PERSONAS.find((p) => p.id === byAvatar) ?? PERSONAS.find((p) => p.defaultName === speaker);
+  return persona?.voice ?? "male";
+}
+
+/** A stable browser voice per panelist, matching gender and preferring the session language. */
+function pickVoice(voices: SpeechSynthesisVoice[], lang: string, speaker: string, gender: VoiceGender) {
   const norm = (l: string) => l.replace("_", "-").toLowerCase();
   let pool = voices.filter((v) => norm(v.lang) === norm(lang));
   if (pool.length === 0) pool = voices.filter((v) => norm(v.lang).startsWith(lang.split("-")[0]));
-  return pool.length ? pool[hashString(speaker) % pool.length] : null;
+  if (pool.length === 0) pool = voices.filter((v) => norm(v.lang).startsWith("en"));
+  const wanted = gender === "female" ? FEMALE_VOICE : MALE_VOICE;
+  const other = gender === "female" ? MALE_VOICE : FEMALE_VOICE;
+  const matching = pool.filter((v) => wanted.test(v.name));
+  // Unlabelled voices are a fallback; never pick a voice clearly of the other gender if avoidable.
+  const neutral = pool.filter((v) => !other.test(v.name));
+  const choice = matching.length ? matching : neutral.length ? neutral : pool;
+  return choice.length ? choice[hashString(speaker) % choice.length] : null;
 }
 
 function sleep(ms: number) {
@@ -243,6 +268,7 @@ function sleep(ms: number) {
 
 interface QueuedClip {
   speaker: AgentName;
+  gender: VoiceGender;
   turnId: number | null;
   text: string;
   yieldsFloor: boolean;
@@ -381,6 +407,7 @@ class GDAudioEngine {
     turnId: number | null,
     text: string,
     yieldsFloor: boolean,
+    avatarId?: string,
   ): void {
     const ctx = this.ctx;
     if (!ctx) return;
@@ -389,7 +416,8 @@ class GDAudioEngine {
       console.warn("[useGDSocket] failed to decode agent audio", err);
       return null;
     });
-    this.queue.push({ speaker, turnId, text, yieldsFloor, decoded });
+    const gender = genderForSpeaker(speaker, avatarId);
+    this.queue.push({ speaker, gender, turnId, text, yieldsFloor, decoded });
     if (!this.pumping) void this.pump();
   }
 
@@ -482,10 +510,13 @@ class GDAudioEngine {
       timer = setTimeout(finish, estimateMs * 2 + 3000);
 
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = this.language;
-      const voice = pickVoice(synth.getVoices(), this.language, clip.speaker);
+      const lang = voiceLanguage(this.language);
+      utterance.lang = lang;
+      const voice = pickVoice(synth.getVoices(), lang, clip.speaker, clip.gender);
       if (voice) utterance.voice = voice;
-      utterance.pitch = 0.85 + (hashString(clip.speaker) % 5) * 0.08;
+      // Pitch nudges voices apart, in the persona's register, when few voices are installed.
+      const spread = (hashString(clip.speaker) % 3) * 0.06;
+      utterance.pitch = clip.gender === "female" ? 1.15 + spread : 0.82 + spread;
       utterance.rate = 1.05;
       utterance.onend = finish;
       utterance.onerror = finish;
@@ -779,6 +810,7 @@ export function useGDSocket({
               msg.turn_id ?? null,
               msg.text ?? "",
               msg.yields_floor === true,
+              msg.avatar_id,
             );
             break;
           case "agent_interrupted":

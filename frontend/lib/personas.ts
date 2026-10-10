@@ -19,6 +19,8 @@ export interface Seat {
   label: string;
   /** Name the backend uses for this persona; "You" for the candidate. */
   defaultName: string;
+  /** Voice to use when the browser speaks this persona (mock mode / audio fallback). */
+  voice: "female" | "male";
   blurb: string;
   icon: LucideIcon;
   /** Identity colour for the avatar ring. Always paired with a text label. */
@@ -29,6 +31,7 @@ export const USER_SEAT: Seat = {
   id: "user",
   label: "You",
   defaultName: "You",
+  voice: "male",
   blurb: "Candidate",
   icon: User,
   color: "#10b981",
@@ -40,6 +43,7 @@ export const PERSONAS: readonly Seat[] = [
     id: "moderator",
     label: "Moderator",
     defaultName: "Arjun",
+    voice: "male",
     blurb: "Keeps time and steers the discussion",
     icon: Scale,
     color: "#6366f1",
@@ -48,6 +52,7 @@ export const PERSONAS: readonly Seat[] = [
     id: "dominator",
     label: "Dominator",
     defaultName: "Kabir",
+    voice: "male",
     blurb: "Talks over others, pushes hard opinions",
     icon: Megaphone,
     color: "#e11d48",
@@ -56,6 +61,7 @@ export const PERSONAS: readonly Seat[] = [
     id: "data_driven",
     label: "Data-Driven",
     defaultName: "Anushka",
+    voice: "female",
     blurb: "Backs every point with numbers",
     icon: ChartColumn,
     color: "#d97706",
@@ -64,6 +70,7 @@ export const PERSONAS: readonly Seat[] = [
     id: "bridger",
     label: "Bridger",
     defaultName: "Priya",
+    voice: "female",
     blurb: "Connects opposing viewpoints",
     icon: Handshake,
     color: "#0891b2",
@@ -72,6 +79,7 @@ export const PERSONAS: readonly Seat[] = [
     id: "quiet_analyst",
     label: "Quiet Analyst",
     defaultName: "Rohan",
+    voice: "male",
     blurb: "Speaks rarely, with sharp analysis",
     icon: Glasses,
     color: "#c026d3",

@@ -61,18 +61,19 @@ ACK_MIN_ANSWER_SECONDS = 1.2
 PCM_BYTES_PER_SECOND = 16000 * 2
 
 REPEAT_REQUEST = re.compile(
-    r"\b(repeat|again|pardon|come again|say that|didn'?t (hear|get|catch)|can'?t hear|dobara|phir se)\b",
+    r"(\b(repeat|again|pardon|come again|say that|didn'?t (hear|get|catch)|can'?t hear|dobara|phir se)\b"
+    r"|दोबारा|फिर से)",
     re.IGNORECASE,
 )
 END_REQUEST = re.compile(
     r"(continue (it |this )?(on )?(another|some other|other|a different|next) (day|time)"
     r"|(want|like) to (stop|end|leave|finish)|let'?s (stop|end|wrap)|wrap (it |this )?up"
     r"|end (the|this) (session|discussion|gd)|stop (here|now|for today)|that'?s all for today"
-    r"|band kar|khatam kar|kal continue)",
+    r"|band kar|khatam kar|kal continue|बंद कर|खत्म कर|किसी और दिन)",
     re.IGNORECASE,
 )
 HEARING_CONFIRMATION = re.compile(
-    r"\b(yes|yeah|yep|haan|i can hear|can hear you|audible|loud and clear)\b",
+    r"(\b(yes|yeah|yep|haan|i can hear|can hear you|audible|loud and clear)\b|हाँ|हां|सुन)",
     re.IGNORECASE,
 )
 
@@ -105,6 +106,20 @@ PHRASES: Dict[str, Dict[str, Any]] = {
         "time_up": "Maaf kijiye, beech mein tok raha hoon, aaj ka samay khatam ho gaya hai.",
         "fallback_question": "Aapka kya kehna hai?",
         "acks": ["Hmm, accha.", "Theek hai.", "Achha."],
+    },
+    "hi_deva": {
+        "opening": (
+            "इस ग्रुप डिस्कशन में आप सभी का स्वागत है। आज का विषय है '{topic}'। "
+            "आइए इसके तकनीकी और सामाजिक, दोनों पहलुओं पर बात करें। {name}, क्या आप शुरुआत करेंगे?"
+        ),
+        "check_in": "क्या आप मुझे सुन पा रहे हैं? क्या मैं सवाल दोबारा पूछूँ?",
+        "repeat_intro": "ज़रूर, सवाल फिर से।",
+        "go_ahead": "अच्छा, बोलिए।",
+        "not_caught": "माफ़ कीजिए, ठीक से सुनाई नहीं दिया। क्या आप दोबारा बोलेंगे?",
+        "move_on": "कोई बात नहीं, हम आपके पास वापस आएँगे। चलिए आगे बढ़ते हैं।",
+        "time_up": "माफ़ कीजिए, बीच में टोक रहा हूँ, आज का समय समाप्त हो गया है।",
+        "fallback_question": "आपका क्या कहना है?",
+        "acks": ["हम्म, अच्छा।", "ठीक है।", "अच्छा।"],
     },
 }
 
@@ -183,6 +198,9 @@ class GDOrchestrator:
         self.language: str = "en-IN"
         self.panel: List[Persona] = []
         self.candidate_profile: str = ""
+        # Measured delivery signals for the report (speech pace, recognition, responsiveness).
+        self.delivery: Dict[str, Any] = _new_delivery_stats()
+        self.floor_opened_at: float = 0.0
         self.session_seconds: int = DEFAULT_SESSION_SECONDS
         self.time_up_task: Optional[asyncio.Task] = None
         self.start_time: float = 0.0
@@ -221,7 +239,14 @@ class GDOrchestrator:
 
     @property
     def _phrases(self) -> Dict[str, Any]:
-        return PHRASES["hi" if self.language == "hi-IN" else "en"]
+        if self.language == "hi-IN":
+            return PHRASES["hi_deva"]
+        return PHRASES["hi" if self.language == "hinglish" else "en"]
+
+    @property
+    def speech_language(self) -> str:
+        """Language code for Sarvam STT/TTS, which take Indian language codes only."""
+        return {"en-US": "en-IN", "hinglish": "hi-IN"}.get(self.language, self.language)
 
     # -----------------------------------------------------------------------
     # Message Dispatcher
@@ -284,6 +309,7 @@ class GDOrchestrator:
         self.is_active = True
         self.transcript.clear()
         self.interruptions_handled = 0
+        self.delivery = _new_delivery_stats()
         self.user_audio_buffer.clear()
         self.outstanding.clear()
         self.last_ai_speaker = None
@@ -344,6 +370,8 @@ class GDOrchestrator:
         report = await evaluate_session(
             transcripts=self.transcript,
             interruptions_count=self.interruptions_handled,
+            delivery=self.delivery,
+            topic=self.topic,
         )
 
         await self._send(report)
@@ -385,7 +413,7 @@ class GDOrchestrator:
 
     async def _summary_clip(self, stopping_early: bool) -> Clip:
         tail = ", saying you'll continue another day" if stopping_early else ""
-        fallback = MOCK_SUMMARY_HI if self.language == "hi-IN" else MOCK_SUMMARY_EN
+        fallback = MOCK_SUMMARY_HI if self.language in ("hi-IN", "hinglish") else MOCK_SUMMARY_EN
         return await self._custom_clip(
             self.panel[0],
             INSTRUCTIONS["summary"].format(tail=tail),
@@ -514,7 +542,9 @@ class GDOrchestrator:
         record: bool = True,
     ) -> Clip:
         try:
-            audio = await synthesize_speech(text=text, speaker=persona.avatar_id, language_code=self.language)
+            audio = await synthesize_speech(
+                text=text, speaker=persona.avatar_id, language_code=self.speech_language
+            )
         except Exception as exc:
             # Send the line anyway: the client speaks placeholder audio with the browser's voice.
             logger.error("TTS failed for %s (%s); sending text with placeholder audio.", persona.name, exc)
@@ -596,6 +626,7 @@ class GDOrchestrator:
     def _begin_handoff(self, question: Clip) -> None:
         asker = next((p for p in self.panel if p.name == question.speaker), self.panel[0])
         self._cancel_handoff_prefetch()
+        self.delivery["questions"] += 1
         self.handoff = Handoff(
             asker=asker,
             question=question,
@@ -622,6 +653,7 @@ class GDOrchestrator:
         self.current_avatar_id = None
         self.user_audio_buffer.clear()
         self.user_spoke.clear()
+        self.floor_opened_at = time.time()
         await self._set_floor("user")
         self._cancel_task(self.user_turn_task)
         self.user_turn_task = asyncio.create_task(self._await_user_response())
@@ -644,6 +676,7 @@ class GDOrchestrator:
 
         if handoff and not handoff.checked_in:
             handoff.checked_in = True
+            self.delivery["check_ins"] += 1
             logger.info("No response after %.1fs; %s checks in.", timeout, handoff.asker.name)
             await self._set_floor("panel")
             self.is_ai_speaking = True
@@ -695,6 +728,8 @@ class GDOrchestrator:
 
         self.user_audio_buffer.extend(pcm_chunk)
         self.last_candidate_speech_time = time.time()
+        if not self.user_spoke.is_set() and self.floor_opened_at:
+            self.delivery["response_delays"].append(round(time.time() - self.floor_opened_at, 2))
         self.user_spoke.set()
         self._restart_pause_timer()
 
@@ -729,6 +764,10 @@ class GDOrchestrator:
 
         text = await self._transcribe(pcm)
         words = text.split()
+        self.delivery["turns"] += 1
+        self.delivery["speech_seconds"] += len(pcm) / PCM_BYTES_PER_SECOND
+        if not text:
+            self.delivery["not_understood"] += 1
 
         if handoff and not text:
             asker = handoff.asker
@@ -772,6 +811,8 @@ class GDOrchestrator:
             return
 
         # A real answer: the panel responds to it.
+        if text and handoff:
+            self.delivery["answered"] += 1
         if text:
             self._record_user(text)
             await self._send_user_transcript(text)
@@ -861,7 +902,7 @@ class GDOrchestrator:
         if not pcm:
             return ""
         try:
-            text = await transcribe_audio_bytes(audio_bytes=pcm, language_code=self.language)
+            text = await transcribe_audio_bytes(audio_bytes=pcm, language_code=self.speech_language)
             return text.strip()
         except Exception as exc:
             logger.error("Error transcribing user audio via Sarvam STT: %s", exc)
@@ -932,6 +973,18 @@ class GDOrchestrator:
         """Cancel an asynchronous task safely (never the task that is calling this)."""
         if task is not None and not task.done() and task is not asyncio.current_task():
             task.cancel()
+
+
+def _new_delivery_stats() -> Dict[str, Any]:
+    return {
+        "questions": 0,  # times the panel handed the candidate the floor
+        "answered": 0,  # of those, answered with recognisable speech
+        "check_ins": 0,  # "can you hear me?" prompts needed
+        "turns": 0,  # candidate speaking turns
+        "not_understood": 0,  # turns where speech could not be transcribed
+        "speech_seconds": 0.0,  # total candidate audio sent
+        "response_delays": [],  # seconds from floor opening to first speech
+    }
 
 
 def _describe_profile(profile: Optional[Dict[str, Any]]) -> str:

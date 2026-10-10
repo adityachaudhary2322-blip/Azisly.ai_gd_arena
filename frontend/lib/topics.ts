@@ -29,6 +29,8 @@ export const MIN_MINUTES = 1;
 export const MAX_MINUTES = 60;
 
 export const LANGUAGES = [
-  { value: "en-IN", label: "English" },
-  { value: "hi-IN", label: "Hindi + English (Hinglish)" },
+  { value: "en-IN", label: "English (India)" },
+  { value: "en-US", label: "English (US)" },
+  { value: "hi-IN", label: "Hindi" },
+  { value: "hinglish", label: "Hinglish (Hindi + English)" },
 ] as const;

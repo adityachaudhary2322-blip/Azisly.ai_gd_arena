@@ -15,16 +15,21 @@ GD Arena puts you in a spoken group discussion with 3 to 5 AI panelists, each wi
 
 ### Done (works now)
 
-- **Lobby:** pick a topic (placement classics, abstract, or your own), the panel size (3 to 5), the language (English, or Hindi + English / Hinglish), and the length (presets from 1 minute, or any 1 to 60 minutes). Optionally add your tech field and the topics you know, and the panel tailors its questions to you.
+- **Lobby:** pick a topic (placement classics, abstract, or your own), the panel size (3 to 5), the language (English (India), English (US), Hindi, or Hinglish), and the length (presets from 1 minute, or any 1 to 60 minutes). Optionally add your tech field and the topics you know, and the panel tailors its questions to you.
 - **Live voice discussion:**
   - Panelists speak with distinct voices and take turns with natural gaps. The next line is prepared while the current one plays, so there is no dead air.
   - Every few turns a panelist asks you a direct question. The mic opens only then, so speaker echo can't derail the discussion.
   - If you're silent for 1.5 s, the asker checks in ("Can you hear me? Should I repeat the question?"). Ask for a repeat and they rephrase it; say "I'd like to continue another day" and the moderator summarizes and ends the session.
 - **Adaptive, on-topic panel:** the opening, the replies to your answers, the check-ins, the repeats, the time-up line and the summary are all generated from the topic and the conversation so far. Every prompt keeps the panel strictly on topic.
 - **Time limit:** when the timer runs out, the moderator cuts in (even mid-sentence), says time is up, summarizes, and the report opens.
-- **Report:** your speaking time against an equal share, the initiative score, the speaker-balance chart, quote-backed feedback cards, and the full transcript. It survives a page refresh.
+- **Detailed report:**
+  - An overall score, plus a score out of 10 for each of fluency, accent & clarity, logic & structure, knowledge & relevance, confidence & responsiveness, and listening & engagement. Each comes with a reason and a specific tip.
+  - What went well, and a ranked list of what to improve.
+  - Measured delivery stats: speaking pace, filler words, questions answered, response time.
+  - Speaking time against an equal share, the speaker-balance chart, quote-backed feedback cards, and the full transcript. It survives a page refresh.
+- **Voices:** female personas (Anushka, Priya) speak with female voices, both with Sarvam and with the browser's fallback voice.
 - **Installable mobile app (PWA):** phone-first layout, an install prompt on Android and desktop Chrome, and "Add to Home Screen" steps on iPhone.
-- **Tests:** 40 backend tests (turn-taking, check-ins, repeats, time-up, personalization, topic rules, services), plus browser end-to-end runs against a mock backend.
+- **Tests:** 48 backend tests (turn-taking, check-ins, repeats, time-up, personalization, topic rules, languages, scoring, services), plus browser end-to-end runs against a mock backend.
 
 ### Left (next 16 hours)
 
